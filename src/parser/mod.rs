@@ -1,5 +1,4 @@
 use std::fmt;
-use std::process::exit;
 
 use crate::lexer::Lexer;
 use crate::token::{Token, TokenType};
@@ -19,6 +18,38 @@ pub enum Precedence {
     Function,
     Index,
     Error,
+}
+
+fn get_token_precedence(token: &Token) -> Precedence {
+    match token.token_type {
+        TokenType::Assign => Precedence::Assign,
+        TokenType::PlusEquals => Precedence::Assign,
+        TokenType::MinusEquals => Precedence::Assign,
+        TokenType::AsteriskEquals => Precedence::Assign,
+        TokenType::SlashEquals => Precedence::Assign,
+        TokenType::PercentEquals => Precedence::Assign,
+        TokenType::Or => Precedence::Or,
+        TokenType::And => Precedence::And,
+        TokenType::Equals => Precedence::Equals,
+        TokenType::NotEquals => Precedence::Equals,
+        TokenType::LessThan => Precedence::Compare,
+        TokenType::LessThanEquals => Precedence::Compare,
+        TokenType::GreaterThan => Precedence::Compare,
+        TokenType::GreaterThanEquals => Precedence::Compare,
+        TokenType::Plus => Precedence::Add,
+        TokenType::Minus => Precedence::Add,
+        TokenType::Asterisk => Precedence::Multiply,
+        TokenType::Slash => Precedence::Multiply,
+        TokenType::Percent => Precedence::Multiply,
+        TokenType::Lparen => Precedence::Function,
+        TokenType::Lbracket => Precedence::Index,
+        TokenType::Identifier(_) => Precedence::Error,
+        TokenType::Integer(_) => Precedence::Error,
+        TokenType::Note => Precedence::Error,
+        TokenType::Rest => Precedence::Error,
+        TokenType::Control => Precedence::Error,
+        _ => Precedence::Nil,
+    }
 }
 
 pub struct ParserError {
@@ -86,6 +117,7 @@ impl<'a> Parser<'a> {
         if self.curr.is_none() {
             return None
         }
+        let mut require_semicolon = true;
         let output = match &self.curr.as_ref().unwrap().token_type {
             TokenType::Return => self.parse_return_statement(),
             TokenType::Yield => self.parse_yield_statement(),
@@ -98,12 +130,29 @@ impl<'a> Parser<'a> {
                     self.parse_expression_statement()
                 }
             },
-            TokenType::For => self.parse_for_statement(),
+            TokenType::For => {
+                require_semicolon = false;
+                self.parse_for_statement()
+            },
+            TokenType::While => {
+                require_semicolon = false;
+                self.parse_while_statement()
+            },
+            TokenType::Loop => {
+                require_semicolon = false;
+                self.parse_while_statement()
+            },
+            TokenType::If => {
+                require_semicolon = false;
+                self.parse_conditional_statement()
+            },
             _ => self.parse_expression_statement(),
         };
 
         // Currently expression statements require a semicolon.
-        let _ = self.expect_peek(TokenType::Semicolon);
+        if require_semicolon {
+            let _ = self.expect_peek(TokenType::Semicolon);
+        }
 
         output
     }
@@ -209,9 +258,74 @@ impl<'a> Parser<'a> {
         Some(ast::Statement::For { token: for_token, identifier, collection, block })
     }
 
+    fn parse_while_statement(&mut self) -> Option<ast::Statement> {
+        let token = self.curr.take().unwrap();
+        if token.token_type == TokenType::Loop {
+            if !self.expect_peek(TokenType::Lbrace) {
+                return None;
+            }
+            self.step();
+            let block = self.parse_statement_block();
+            let null_token = Token { token_type: TokenType::True, line: 0, column: 0, length: 0 };
+            let condition = Box::new(ast::Expression::Boolean{token: null_token, value: true});
+            return Some(ast::Statement::While { token, condition, block })
+        }
+        if !self.expect_peek(TokenType::Lparen) {
+            return None;
+        }
+        self.step();
+        let condition = Box::new(self.parse_expression(Precedence::Nil)?);
+        if !self.expect_peek(TokenType::Rparen) {
+            return None;
+        }
+        if !self.expect_peek(TokenType::Lbrace) {
+            return None;
+        }
+        self.step();
+        let block = self.parse_statement_block();
+        Some(ast::Statement::While { token, condition, block })
+    }
+
+    fn parse_conditional_statement(&mut self) -> Option<ast::Statement> {
+        let token = self.curr.take().unwrap();
+        if !self.expect_peek(TokenType::Lparen) {
+            return None;
+        }
+        self.step();
+        let condition = Box::new(self.parse_expression(Precedence::Nil)?);
+        if !self.expect_peek(TokenType::Rparen) {
+            return None;
+        }
+        if !self.expect_peek(TokenType::Lbrace) {
+            return None;
+        }
+        self.step();
+        let consequence = self.parse_statement_block();
+        let mut alternative = None;
+        if self.peek_is(TokenType::Else) { // } else
+            self.step(); // else 
+            if self.peek_is(TokenType::If) {
+                self.step();
+                alternative = Some(vec![self.parse_conditional_statement()?]);
+            } else {
+                if !self.expect_peek(TokenType::Lbrace) {
+                    return None;
+                }
+                self.step();
+                alternative = Some(self.parse_statement_block());
+            }
+        }
+        return Some(ast::Statement::Conditional {
+            token,
+            condition,
+            consequence,
+            alternative,
+        });
+    }
+
     /* Expression Parsers */
 
-    fn parse_expression(&mut self, _precedence: Precedence) -> Option<ast::Expression> {
+    fn parse_expression(&mut self, precedence: Precedence) -> Option<ast::Expression> {
         if self.curr.is_none() {
             return None;
         }
@@ -225,7 +339,18 @@ impl<'a> Parser<'a> {
             });
             return None;
         }
-        let curr = res.unwrap();
+        let mut curr = res.unwrap();
+
+        loop {
+            if self.curr.is_none() || self.peek_is(TokenType::Semicolon) {
+                break;
+            }
+            if precedence >= get_token_precedence(self.peek.as_ref().unwrap()) {
+                break;
+            }
+            // let left = curr.take();
+            // let token = self.
+        }
         curr
     }
 
@@ -629,7 +754,108 @@ mod test {
         if let Statement::For{ identifier, .. } = stmt {
             assert!(identifier.value.eq("i"));
         } else {
-            panic!("Declare statement parsed incorrectly");
+            panic!("For statement parsed incorrectly");
+        }
+    }
+
+    #[test]
+    fn test_while_statement() {
+        let input = "while (true) {}";
+        let mut lexer = Lexer::new(&input[..]);
+        let mut parser = Parser::new(&mut lexer);
+        let program = parser.parse_program();
+
+        assert_eq!(parser.errors.len(), 0);
+        assert_eq!(program.statements.len(), 1);
+
+        let stmt = program.statements.first().unwrap();
+        
+        if let Statement::While{ .. } = stmt {
+            assert!(true);
+        } else {
+            panic!("While statement parsed incorrectly");
+        }
+    }
+
+    #[test]
+    fn test_loop_statement() {
+        let input = "loop {}";
+        let mut lexer = Lexer::new(&input[..]);
+        let mut parser = Parser::new(&mut lexer);
+        let program = parser.parse_program();
+
+        assert_eq!(parser.errors.len(), 0);
+        assert_eq!(program.statements.len(), 1);
+
+        let stmt = program.statements.first().unwrap();
+        
+        if let Statement::While{ .. } = stmt {
+            assert!(true);
+        } else {
+            panic!("While statement parsed incorrectly");
+        }
+    }
+
+    #[test]
+    fn test_if_statement() {
+        let input = "if (false) {}";
+        let mut lexer = Lexer::new(&input[..]);
+        let mut parser = Parser::new(&mut lexer);
+        let program = parser.parse_program();
+
+        assert_eq!(parser.errors.len(), 0);
+        assert_eq!(program.statements.len(), 1);
+
+        let stmt = program.statements.first().unwrap();
+        
+        if let Statement::Conditional{ alternative, .. } = stmt {
+            assert!(alternative.is_none());
+        } else {
+            panic!("If statement parsed incorrectly");
+        }
+    }
+
+    #[test]
+    fn test_if_else_statement() {
+        let input = "if (false) {} else {}";
+        let mut lexer = Lexer::new(&input[..]);
+        let mut parser = Parser::new(&mut lexer);
+        let program = parser.parse_program();
+
+        assert_eq!(parser.errors.len(), 0);
+        assert_eq!(program.statements.len(), 1);
+
+        let stmt = program.statements.first().unwrap();
+        
+        if let Statement::Conditional{ alternative, .. } = stmt {
+            assert!(alternative.is_some());
+        } else {
+            panic!("If-else statement parsed incorrectly");
+        }
+    }
+
+    #[test]
+    fn test_if_else_if_statement() {
+        let input = "if (false) {} else if (true) {} else {}";
+        let mut lexer = Lexer::new(&input[..]);
+        let mut parser = Parser::new(&mut lexer);
+        let program = parser.parse_program();
+
+        assert_eq!(parser.errors.len(), 0);
+        assert_eq!(program.statements.len(), 1);
+
+        let stmt = program.statements.first().unwrap();
+        
+        if let Statement::Conditional{ alternative, .. } = stmt {
+            assert!(alternative.is_some());
+            if let Some(stmts) = alternative {
+                assert_eq!(stmts.len(), 1);
+                if let Statement::Conditional{ alternative, .. } = &stmts[0] {
+                    assert!(alternative.is_some());
+                }
+            }
+        } else {
+            panic!("If-else-if statement parsed incorrectly");
         }
     }
 }
