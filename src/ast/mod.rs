@@ -180,13 +180,13 @@ pub enum Expression {
     Identifier(Identifier),
     Assign {
         token: Token,
-        name: Identifier,
+        left: Box<Expression>,
         value: Box<Expression>,
     },
     CompoundAssign {
         token: Token,
         operator: CompoundAssign,
-        name: Identifier,
+        left: Box<Expression>,
         value: Box<Expression>,
     },
     Integer {
@@ -254,8 +254,8 @@ impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Expression::Identifier(identifier) => write!(f, "{}", identifier.value),
-            Expression::Assign { name, value, .. } => write!(f, "{} = {}", name.value, value),
-            Expression::CompoundAssign { name, value, operator, .. } => {
+            Expression::Assign { left, value, .. } => write!(f, "{} = {}", left, value),
+            Expression::CompoundAssign { left, value, operator, .. } => {
                 let op = match operator {
                     CompoundAssign::Add => "+=",
                     CompoundAssign::Subtract => "-=",
@@ -263,7 +263,7 @@ impl fmt::Display for Expression {
                     CompoundAssign::Divide => "/=",
                     CompoundAssign::Modulus => "%=",
                 };
-                write!(f, "{} {} {}", name.value, op, value)
+                write!(f, "{} {} {}", left, op, value)
             },
             Expression::Integer { value, .. } => write!(f, "{}", value),
             Expression::Boolean { value, .. } => write!(f, "{}", value),
