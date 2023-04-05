@@ -1,5 +1,5 @@
-use std::{collections::HashMap, rc::Rc};
-use crate::object::BaseObject;
+use std::{collections::HashMap, rc::Rc, cell::RefCell};
+use crate::object::Object;
 
 /// Label defining level of variable scope.
 ///
@@ -30,7 +30,7 @@ pub struct SymbolTable {
     pub symbol_count: i32,
     pub depth: i32,
     pub kind: ScopeType,
-    pub parent: Option<Box<SymbolTable>>
+    pub parent: Option<Rc<RefCell<SymbolTable>>>
 }
 
 static mut iota: i32 = 0;
@@ -39,7 +39,7 @@ static mut iota: i32 = 0;
 /// compilation process.
 ///
 impl SymbolTable {
-    pub fn new(kind: ScopeType, parent: Option<SymbolTable>) -> SymbolTable {
+    pub fn new(kind: ScopeType, parent: Option<Rc<RefCell<SymbolTable>>>) -> SymbolTable {
         SymbolTable{
             symbols: HashMap::new(),
             free_symbols: Vec::new(),
@@ -47,14 +47,10 @@ impl SymbolTable {
             depth: if parent.is_none() {
                 -1
             } else {
-                parent.as_ref().unwrap().depth + 1
+                parent.as_ref().unwrap().borrow().depth + 1
             },
             kind,
-            parent: if let Some(parent) = parent {
-                Some(Box::new(parent))
-            } else {
-                None
-            }
+            parent
         }
     }
 
@@ -118,7 +114,7 @@ impl SymbolTable {
     ///
     pub fn get(&mut self, label: &str) -> Option<Rc<SymbolIdentifier>> {
         if self.symbols.contains_key(label) && self.parent.is_some() {
-            let variable = self.parent.as_mut().unwrap().get(label);
+            let variable = self.parent.as_ref()?.borrow_mut().get(label);
             if let Some(var) = variable {
                 if var.kind == ScopeType::Global || var.kind == ScopeType::Native {
                     return Some(var);
@@ -139,7 +135,7 @@ impl SymbolTable {
     /// Create a default global symbol table with native values
     /// already populated.
     ///
-    pub fn create_global_symbol_table(builtins: Option<HashMap<String, BaseObject>>) -> SymbolTable {
+    pub fn create_global_symbol_table(builtins: Option<HashMap<String, Object>>) -> SymbolTable {
         let globals = SymbolTable::new(ScopeType::Global, None);
         // Add builtins
         globals
