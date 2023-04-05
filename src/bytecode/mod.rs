@@ -148,8 +148,8 @@ pub fn createInstruction(opcode: Opcode, ) {
 
 /// Packs operand value of given bytes at an offset within an instruction array.
 ///
-pub fn pack_big_endian(mut arr: &Bytecode, offset: u8, mut size: u8, value: u8) {
-    let n = value;
+pub fn pack_big_endian(mut arr: &mut Bytecode, offset: u8, mut size: u8, value: u8) {
+    let mut n = value;
     while size > 0 {
         size -= 1;
         arr[(offset + size) as usize] = n & 255;
@@ -160,8 +160,8 @@ pub fn pack_big_endian(mut arr: &Bytecode, offset: u8, mut size: u8, value: u8) 
 /// Retrieves operand value of the given bytes at an offset within an
 /// instruction array.
 ///
-pub fn unpack_big_endian(mut arr: &Bytecode, offset: u32, size: u32) -> u32 {
-    let n = 0;
+pub fn unpack_big_endian(arr: &mut Bytecode, offset: u32, size: u32) -> u32 {
+    let mut n = 0;
     let base: u32 = 256;
     for i in 0..size {
         n += (arr[(offset + i) as usize] as u32) * base.pow(size - i - 1);
@@ -185,9 +185,9 @@ pub fn create_instruction(opcodes: &Opcodes, opcode: Opcode, args: Vec<u8>) -> B
         return instruction;
     }
 
-    let offset = 1;
+    let mut offset = 1;
     for i in 0..operation.num_operands {
-        pack_big_endian(&instruction, offset, operation.operands[i], args[i]);
+        pack_big_endian(&mut instruction, offset, operation.operands[i], args[i]);
         offset += operation.operands[i];
     }
     instruction
@@ -195,8 +195,8 @@ pub fn create_instruction(opcodes: &Opcodes, opcode: Opcode, args: Vec<u8>) -> B
 
 /// Disassemble a bytecode into a more human-readable format.
 ///
-pub fn disassemble(opcodes: &Opcodes, bytecode: &Bytecode) -> Option<String> {
-    let pos = 0;
+pub fn disassemble(opcodes: &Opcodes, mut bytecode: &mut Bytecode) -> Option<String> {
+    let mut pos = 0;
     let mut output = String::from("");
 
     while pos < bytecode.len() {
@@ -211,7 +211,7 @@ pub fn disassemble(opcodes: &Opcodes, bytecode: &Bytecode) -> Option<String> {
             continue;
         }
 
-        let args: Vec<String> = Vec::new();
+        let mut args: Vec<String> = Vec::new();
         for operand in operation.operands {
             args.push(format!("{}", unpack_big_endian(bytecode, pos as u32, operand as u32)));
             pos += operand as usize;

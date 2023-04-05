@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 use crate::object::BaseObject;
 
 /// Label defining level of variable scope.
 ///
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum ScopeType {
     Native,
     Global,
@@ -25,8 +25,8 @@ pub struct SymbolIdentifier {
 /// compilation process.
 ///
 pub struct SymbolTable {
-    symbols: HashMap<String, SymbolIdentifier>,
-    pub free_symbols: Vec<SymbolIdentifier>,
+    symbols: HashMap<String, Rc<SymbolIdentifier>>,
+    pub free_symbols: Vec<Rc<SymbolIdentifier>>,
     pub symbol_count: i32,
     pub depth: i32,
     pub kind: ScopeType,
@@ -72,69 +72,74 @@ impl SymbolTable {
     ///
     pub fn add(&mut self, label: String) -> i32 {
         let label = label.clone();
+        let index = self.symbol_count;
         let symbol = SymbolIdentifier{
             label: label.clone(),
-            index: self.symbol_count,
             depth: self.depth,
-            kind: self.kind
+            kind: self.kind,
+            index
         };
         self.symbol_count += 1;
-        self.symbols.insert(label, symbol);
-        symbol.index
+        self.symbols.insert(label, Rc::new(symbol));
+        index
     }
 
     /// Save the name of the current closure as a symbol in scope.
     ///
-    pub fn set_self(&mut self, label: String) -> SymbolIdentifier {
+    pub fn set_self(&mut self, label: String) -> Rc<SymbolIdentifier> {
         let symbol = SymbolIdentifier{
             label: label.clone(),
             index: 0,
             depth: -1,
             kind: ScopeType::Slf
         };
-        self.symbols.insert(label.clone(), symbol);
+        let symbol = Rc::new(symbol);
+        self.symbols.insert(label.clone(), symbol.clone());
         symbol
     }
 
     /// Free a variable for use in an inner function or closure.
     ///
-    pub fn free(&mut self, symbol: SymbolIdentifier) -> SymbolIdentifier {
-        self.free_symbols.push(symbol);
+    pub fn free(&mut self, symbol: Rc<SymbolIdentifier>) -> Rc<SymbolIdentifier> {
+        self.free_symbols.push(symbol.clone());
         let free_symbol = SymbolIdentifier{
             label: symbol.label.clone(),
             index: self.free_symbols.len() as i32 - 1,
             depth: symbol.depth,
             kind: ScopeType::Free
         };
-        self.symbols.insert(symbol.label.clone(), free_symbol);
+        let free_symbol = Rc::new(free_symbol);
+        self.symbols.insert(symbol.label.clone(), free_symbol.clone());
         free_symbol
     }
 
     /// Look up a symbol in the table. If not found, it recurses
     /// up its parent scope.
     ///
-    pub fn get(&mut self, label: String) -> Option<&SymbolIdentifier> {
-        if self.symbols.contains_key(&label) && self.parent.is_some() {
-            let mut variable = self.parent?.get(label);
-            if variable.is_none() || variable?.kind == ScopeType::Global || variable?.kind == ScopeType::Native {
-                return variable;
+    pub fn get(&mut self, label: &str) -> Option<Rc<SymbolIdentifier>> {
+        if self.symbols.contains_key(label) && self.parent.is_some() {
+            let variable = self.parent.as_mut().unwrap().get(label);
+            if let Some(var) = variable {
+                if var.kind == ScopeType::Global || var.kind == ScopeType::Native {
+                    return Some(var);
+                }
+                return Some(self.free(var));
             }
-            let symbol = variable.take().unwrap();
-            return Some(&self.free(*symbol));
         }
-        return self.symbols.get(&label);
+        let symbol = self.symbols.get(label)?;
+        Some(symbol.clone())
     }
 
     /// Look up a symbol in the table and return its unique index.
     ///
-    pub fn get_index(&mut self, label: String) -> Option<i32> {
+    pub fn get_index(&mut self, label: &str) -> Option<i32> {
         Some(self.get(label)?.index)
     }
 
     /// Create a default global symbol table with native values
     /// already populated.
     ///
-    pub fn create_global_symbol_table(builtins: HashMap<String, BaseObject>) -> SymbolTable {
+    pub fn create_global_symbol_table(builtins: Option<HashMap<String, BaseObject>>) -> SymbolTable {
         let globals = SymbolTable::new(ScopeType::Global, None);
         // Add builtins
         globals
