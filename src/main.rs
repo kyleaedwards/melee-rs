@@ -3,6 +3,10 @@ mod token;
 mod repl;
 mod ast;
 mod parser;
+mod bytecode;
+mod compiler;
+mod symbols;
+mod object;
 
 use crate::repl::create_repl;
 

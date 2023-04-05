@@ -15,11 +15,6 @@ pub fn create_repl() {
 
         // Debug tokens
         let mut lexer = Lexer::new(&input[..]);
-        while let Some(token) = lexer.next() {
-            println!("{:?}", token.token_type);
-        }
-
-        lexer = Lexer::new(&input[..]);
         let mut parser = Parser::new(&mut lexer);
         let program = parser.parse_program();
         if parser.errors.len() > 0 {
