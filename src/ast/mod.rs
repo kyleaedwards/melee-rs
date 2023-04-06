@@ -44,9 +44,16 @@ pub struct Program {
     pub statements: StatementBlock,
 }
 
+pub enum Node {
+    Program(Program),
+    StatementBlock(StatementBlock),
+    Statement(Statement),
+    Expression(Expression)
+}
+
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        println!("{}", self.statements.len());
+        // println!("{}", self.statements.len());
         display_statement_block(f, &self.statements)?;
         Ok(())
     }

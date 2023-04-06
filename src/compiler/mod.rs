@@ -1,7 +1,11 @@
+use core::fmt;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::error::Error;
 use std::rc::Rc;
 
-use crate::bytecode::{Bytecode, Opcode};
+use crate::ast::{Program, StatementBlock, Statement};
+use crate::bytecode::{Bytecode, Opcode, create_instruction, get_opcodes, Operation};
 use crate::object::Object;
 use crate::symbols::{SymbolTable, ScopeType};
 
@@ -13,7 +17,7 @@ struct CompiledInstruction {
 struct CompilerScope {
     /// Serial bytecode instructions representing a program or function body.
     ///
-    pub instructions: Bytecode,
+    pub instructions: RefCell<Bytecode>,
 
     /// Saved instruction to backtrack or remove previous items from the bytecode.
     /// This is primarily used to support implicit returns from block statements.
@@ -26,32 +30,46 @@ struct CompilerScope {
     pub previous_instruction: CompiledInstruction
 }
 
+#[derive(Debug, Clone)]
+struct CompilationError(String);
+
+impl fmt::Display for CompilationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let CompilationError(msg) = self;
+        write!(f, "Compilation error: {}", msg)
+    }
+}
+
 struct Compiler {
     scopes: Vec<CompilerScope>,
     scope_index: i32,
     symbol_table: Rc<RefCell<SymbolTable>>,
     constants: Vec<Object>,
-    loopStarts: Vec<usize>,
-    breaks: Vec<Vec<usize>>
+    loop_starts: Vec<usize>,
+    breaks: Vec<Vec<usize>>,
+    opcodes: HashMap<Opcode, Operation>
 }
 
 impl Compiler {
     pub fn new(constants: Vec<Object>, symbol_table: Rc<RefCell<SymbolTable>>) -> Compiler {
         let mut base_symbol_table = SymbolTable::new(ScopeType::Native, None);
+        let opcodes = get_opcodes();
         // for func in native_functions {
         //     base_symbol_table.add(func.label);
         // }
 
         let mut compiler = Compiler{
             scopes: Vec::new(),
-            scope_index: -1,
+            scope_index: 0,
             symbol_table: Rc::new(RefCell::new(base_symbol_table)),
             constants,
-            loopStarts: Vec::new(),
-            breaks: Vec::new()
+            loop_starts: Vec::new(),
+            breaks: Vec::new(),
+            opcodes
         };
 
         compiler.push_scope(Some(symbol_table));
+        compiler.scope_index = 0;
         compiler
     }
 
@@ -59,7 +77,7 @@ impl Compiler {
         &self.scopes[self.scope_index as usize]
     }
 
-    fn get_instructions(&self) -> &Bytecode {
+    fn get_instructions(&self) -> &RefCell<Bytecode> {
         &self.scopes[self.scope_index as usize].instructions
     }
 
@@ -67,7 +85,7 @@ impl Compiler {
         self.scope_index += 1;
         self.scopes.push(
             CompilerScope{
-                instructions: Vec::new(),
+                instructions: RefCell::new(Vec::new()),
                 last_instruction: CompiledInstruction {
                     opcode: Opcode::NotImplemented,
                     position: -1
@@ -91,5 +109,70 @@ impl Compiler {
             let symbol_table = SymbolTable::new(ScopeType::Local, parent);
             self.symbol_table = Rc::new(RefCell::new(symbol_table));
         }
+    }
+
+    pub fn compile_program(&mut self, program: Program) -> Result<(), CompilationError> {
+        for stmt in program.statements {
+            if let Err(e) = self.compile_statement(stmt) {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn compile_statement_block(&mut self, block: StatementBlock) -> Result<(), CompilationError> {
+        for stmt in block {
+            if let Err(e) = self.compile_statement(stmt) {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn compile_statement(&mut self, stmt: Statement) -> Result<(), CompilationError> {
+        match stmt {
+            Statement::Break { token } => {
+                self.breaks[self.breaks.len() - 1].push(
+                    self.emit(Opcode::Jump, 0xffff, 0),
+                );
+            }
+            Statement::Continue { .. } => {
+                if self.loop_starts.len() == 0 {
+                    return Err(CompilationError(String::from("Cannot use continue outside of a loop")));
+                }
+                self.emit(
+                    Opcode::Jump,
+                    self.loop_starts[self.loop_starts.len() - 1],
+                );
+            }
+            _ => panic!("Not implemented")
+        };
+        Ok(())
+    }
+
+    /// Add an instruction to the program's bytecode.
+    ///
+    fn emit(&mut self, opcode: Opcode, op1: i32, op2: i32) -> i32 {
+        let instructions = self.get_instructions().borrow_mut();
+        let position = instructions.len();
+
+        let instruction = create_instruction(&self.opcodes, opcode, args)
+        instructions.append()
+
+//     const instruction = createInstruction(op, ...operands);
+//     const position = this.instructions().length;
+//     const temp = new Uint8Array(position + instruction.length);
+//     temp.set(this.instructions());
+//     temp.set(instruction, position);
+//     this.scope().instructions = temp;
+//     this.scope().previousInstruction.opcode =
+//       this.scope().lastInstruction.opcode;
+//     this.scope().previousInstruction.position =
+//       this.scope().lastInstruction.position;
+//     this.scope().lastInstruction.opcode = op;
+//     this.scope().lastInstruction.position = position;
+//     return position;
+//   }
+        position as i32
     }
 }
