@@ -167,6 +167,15 @@ pub fn unpack_big_endian(arr: &mut Bytecode, offset: u32, size: u32) -> u32 {
     n
 }
 
+pub fn get_opcode_by_u8(num: u8) -> Opcode {
+    let operation = &OPCODES[num as usize];
+    if operation.is_none() {
+        Opcode::NotImplemented
+    } else {
+        operation.as_ref().unwrap().opcode
+    }
+}
+
 /// Create new instruction, packing operands in big-endian byte order.
 ///
 pub fn create_instruction(opcode: Opcode, op1: i32, op2: i32) -> Bytecode {

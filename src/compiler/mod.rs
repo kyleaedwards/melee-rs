@@ -2,8 +2,8 @@ use core::fmt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ast::{Program, StatementBlock, Statement};
-use crate::bytecode::{Bytecode, Opcode, create_instruction, Operation};
+use crate::ast::{Program, StatementBlock, Statement, Expression};
+use crate::bytecode::{Bytecode, Opcode, create_instruction, get_opcode_by_u8};
 use crate::object::Object;
 use crate::symbols::{SymbolTable, ScopeType};
 
@@ -98,6 +98,28 @@ impl Compiler {
         }
     }
 
+    /// Remove the topmost scope object and return its instructions.
+    ///
+    fn pop_scope(&mut self) -> Option<RefCell<Bytecode>> {
+        if self.scope_index < 1 || self.symbol_table.borrow().parent.is_none() {
+            return None;
+        }
+
+        let parent = self.symbol_table.borrow_mut().parent.take()?;
+        self.symbol_table = parent;
+        self.scope_index -= 1;
+        
+        let scope = self.scopes.pop()?;
+        Some(scope.instructions)
+    }
+
+    /// Keeps track of a program constant and return a reference.
+    ///
+    fn add_constant(&mut self, obj: Object) -> usize {
+        self.constants.push(obj);
+        return self.constants.len() - 1;
+    }
+
     pub fn compile_program(&mut self, program: Program) -> Result<(), CompilationError> {
         for stmt in program.statements {
             if let Err(e) = self.compile_statement(stmt) {
@@ -135,7 +157,7 @@ impl Compiler {
             }
             Statement::Return { value, .. } => {
                 if let Some(val) = value {
-                    self.compile_expression(val);
+                    self.compile_expression(val)?;
                 } else {
                     self.emit(Opcode::Null, 0, 0);
                 }
@@ -143,15 +165,178 @@ impl Compiler {
             }
             Statement::Yield { value, .. } => {
                 if let Some(val) = value {
-                    self.compile_expression(val);
+                    self.compile_expression(val)?;
                 } else {
                     self.emit(Opcode::Null, 0, 0);
                 }
                 self.emit(Opcode::Yield, 0, 0);
             }
-            _ => panic!("Not implemented")
+            Statement::Expression(expr) => {
+                self.compile_expression(expr)?;
+                self.emit(Opcode::Pop, 0, 0);
+            }
+            Statement::Declare { name, value, .. } => {
+                let symbol_table = self.symbol_table.clone();
+                let mut symbol_table = symbol_table.borrow_mut();
+                let index = symbol_table.add(name.value);
+                self.compile_expression(value)?;
+                let set_opcode = if symbol_table.kind == ScopeType::Global {
+                    Opcode::SetGlobal
+                } else {
+                    Opcode::Set
+                };
+                self.emit(set_opcode, index, 0);
+            }
+            Statement::For { identifier, collection, block, .. } => {
+                let symbol_table = self.symbol_table.clone();
+                let mut symbol_table = symbol_table.borrow_mut();
+                let position = symbol_table.add(identifier.value);
+                let set_opcode = if symbol_table.kind == ScopeType::Global {
+                    Opcode::SetGlobal
+                } else {
+                    Opcode::Set
+                };
+                let get_opcode = if symbol_table.kind == ScopeType::Global {
+                    Opcode::GetGlobal
+                } else {
+                    Opcode::Get
+                };
+                let counter = symbol_table.add_iota();
+                let collection_index = symbol_table.add_iota();
+
+                let incr = self.add_constant(Object::Int(1)) as i32;
+                let base = self.add_constant(Object::Int(0)) as i32;
+
+                self.emit(Opcode::Const, base, 0);
+                self.emit(set_opcode, counter, 0);
+
+                // Save collection
+                self.compile_expression(collection)?;
+                self.emit(set_opcode, collection_index, 0);
+
+                let instructions = {
+                    let scope = &self.scopes[self.scope_index as usize];
+                    scope.instructions.borrow().len()
+                };
+
+                self.loop_starts.push(instructions);
+                self.breaks.push(Vec::new());
+
+                // Check if iterator has gone past the end of the array
+                self.emit(get_opcode, collection_index, 0);
+                self.emit(Opcode::Len, 0, 0);
+                self.emit(get_opcode, counter, 0);
+                self.emit(Opcode::GreaterThan, 0, 0);
+
+                let jump_out = self.emit(Opcode::JumpIfNot, 0xffff, 0) as usize;
+
+                // Set the current array item in the local variable
+                self.emit(get_opcode, collection_index, 0);
+                self.emit(get_opcode, counter, 0);
+                self.emit(Opcode::Index, 0, 0);
+                self.emit(set_opcode, position, 0);
+
+                // Increment the iterator
+                self.emit(get_opcode, counter, 0);
+                self.emit(Opcode::Const, incr, 0);
+                self.emit(Opcode::Add, 0, 0);
+                self.emit(set_opcode, counter, 0);
+
+                // Compile code block and loop
+                self.compile_statement_block(block)?;
+                self.emit(Opcode::Jump, self.loop_starts[self.loop_starts.len() - 1] as i32, 0);
+
+                // Replace jump-out condition with position after loop
+                let instructions = {
+                    let scope = &self.scopes[self.scope_index as usize];
+                    scope.instructions.borrow().len()
+                } as i32;
+                self.replace_instruction(jump_out, instructions, 0);
+
+                // Replace any break statements with position after loop
+                let breaks = self.breaks.pop();
+                if let Some(breaks) = breaks {
+                    for break_pos in breaks {
+                        self.replace_instruction(break_pos, instructions, 0);
+                    }
+                }
+
+                self.loop_starts.pop();
+            }
+            Statement::While { condition, block, .. } => {
+                let instructions = {
+                    let scope = &self.scopes[self.scope_index as usize];
+                    scope.instructions.borrow().len()
+                };
+
+                self.loop_starts.push(instructions);
+                self.breaks.push(Vec::new());
+      
+                self.compile_expression(condition)?;
+                let jump_out = self.emit(Opcode::JumpIfNot, 0xffff, 0) as usize;
+
+                self.compile_statement_block(block)?;
+                self.emit(Opcode::Jump, self.loop_starts[self.loop_starts.len() - 1] as i32, 0);
+                
+                let instructions = {
+                    let scope = &self.scopes[self.scope_index as usize];
+                    scope.instructions.borrow().len()
+                } as i32;
+                self.replace_instruction(jump_out, instructions, 0);
+
+                if let Some(breaks) = self.breaks.pop() {
+                    for break_pos in breaks {
+                        self.replace_instruction(break_pos, instructions, 0);
+                    }
+                }
+
+                self.loop_starts.pop();
+            }
+            Statement::Conditional { condition, consequence, alternative, .. } => {
+                self.compile_expression(condition)?;
+
+                // Jump to else clause (or outside of conditional statement if else doesn't exist).
+                let jump_to_else = self.emit(Opcode::JumpIfNot, 0xffff, 0) as usize;
+                self.compile_statement_block(consequence)?;
+      
+                let jump_out = self.emit(Opcode::Jump, 0xffff, 0) as usize;
+
+                let instructions = {
+                    let scope = &self.scopes[self.scope_index as usize];
+                    scope.instructions.borrow().len()
+                } as i32;
+                self.replace_instruction(jump_to_else, instructions, 0);
+
+                if let Some(alt) = alternative {
+                    self.compile_statement_block(alt)?;
+                }
+
+                let instructions = {
+                    let scope = &self.scopes[self.scope_index as usize];
+                    scope.instructions.borrow().len()
+                } as i32;
+                self.replace_instruction(jump_out, instructions, 0);
+            }
         };
         Ok(())
+    }
+
+    pub fn compile_expression(&mut self, expr: Box<Expression>) -> Result<(), CompilationError> {
+        Err(CompilationError(String::from("Not implemented")))
+    }
+
+    /// Replaces an instruction in the program's bytecode.
+    ///
+    fn replace_instruction(&mut self, position: usize, op1: i32, op2: i32) {
+        let scope = &self.scopes[self.scope_index as usize];
+        let mut instructions = scope.instructions.borrow_mut();
+
+        let opcode = get_opcode_by_u8(instructions[position]);
+        let instruction = create_instruction(opcode, op1, op2);
+
+        for i in 0..instruction.len() {
+            instructions[position + i] = instruction[i];
+        }
     }
 
     /// Add an instruction to the program's bytecode.
