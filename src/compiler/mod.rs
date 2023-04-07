@@ -1,17 +1,15 @@
 use core::fmt;
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::error::Error;
 use std::rc::Rc;
 
 use crate::ast::{Program, StatementBlock, Statement};
-use crate::bytecode::{Bytecode, Opcode, create_instruction, get_opcodes, Operation};
+use crate::bytecode::{Bytecode, Opcode, create_instruction, Operation};
 use crate::object::Object;
 use crate::symbols::{SymbolTable, ScopeType};
 
 struct CompiledInstruction {
     pub opcode: Opcode,
-    pub position: i32,
+    pub position: i32, // TODO: Make these Option<usize> instead of negatives
 }
 
 struct CompilerScope {
@@ -42,18 +40,16 @@ impl fmt::Display for CompilationError {
 
 struct Compiler {
     scopes: Vec<CompilerScope>,
-    scope_index: i32,
+    scope_index: i32, // TODO: Make these Option<usize> instead of negatives
     symbol_table: Rc<RefCell<SymbolTable>>,
     constants: Vec<Object>,
     loop_starts: Vec<usize>,
-    breaks: Vec<Vec<usize>>,
-    opcodes: HashMap<Opcode, Operation>
+    breaks: Vec<Vec<usize>>
 }
 
 impl Compiler {
     pub fn new(constants: Vec<Object>, symbol_table: Rc<RefCell<SymbolTable>>) -> Compiler {
         let mut base_symbol_table = SymbolTable::new(ScopeType::Native, None);
-        let opcodes = get_opcodes();
         // for func in native_functions {
         //     base_symbol_table.add(func.label);
         // }
@@ -64,21 +60,12 @@ impl Compiler {
             symbol_table: Rc::new(RefCell::new(base_symbol_table)),
             constants,
             loop_starts: Vec::new(),
-            breaks: Vec::new(),
-            opcodes
+            breaks: Vec::new()
         };
 
         compiler.push_scope(Some(symbol_table));
         compiler.scope_index = 0;
         compiler
-    }
-
-    fn get_scope(&self) -> &CompilerScope {
-        &self.scopes[self.scope_index as usize]
-    }
-
-    fn get_instructions(&self) -> &RefCell<Bytecode> {
-        &self.scopes[self.scope_index as usize].instructions
     }
 
     fn push_scope(&mut self, symbol_table: Option<Rc<RefCell<SymbolTable>>>) {
@@ -88,11 +75,11 @@ impl Compiler {
                 instructions: RefCell::new(Vec::new()),
                 last_instruction: CompiledInstruction {
                     opcode: Opcode::NotImplemented,
-                    position: -1
+                    position: -1 // TODO: Make these Option<usize> instead of negatives
                 },
                 previous_instruction: CompiledInstruction {
                     opcode: Opcode::NotImplemented,
-                    position: -1
+                    position: -1 // TODO: Make these Option<usize> instead of negatives
                 }
             }
         );
@@ -131,10 +118,10 @@ impl Compiler {
 
     pub fn compile_statement(&mut self, stmt: Statement) -> Result<(), CompilationError> {
         match stmt {
-            Statement::Break { token } => {
-                self.breaks[self.breaks.len() - 1].push(
-                    self.emit(Opcode::Jump, 0xffff, 0),
-                );
+            Statement::Break { .. } => {
+                let pos = self.emit(Opcode::Jump, 0xffff, 0).clamp(0, i32::MAX) as usize;
+                let last_index = self.breaks.len() - 1;
+                self.breaks[last_index].push(pos);
             }
             Statement::Continue { .. } => {
                 if self.loop_starts.len() == 0 {
@@ -142,8 +129,25 @@ impl Compiler {
                 }
                 self.emit(
                     Opcode::Jump,
-                    self.loop_starts[self.loop_starts.len() - 1],
+                    self.loop_starts[self.loop_starts.len() - 1].clamp(0, i32::MAX as usize) as i32,
+                    0
                 );
+            }
+            Statement::Return { value, .. } => {
+                if let Some(val) = value {
+                    self.compile_expression(val);
+                } else {
+                    self.emit(Opcode::Null, 0, 0);
+                }
+                self.emit(Opcode::Return, 0, 0);
+            }
+            Statement::Yield { value, .. } => {
+                if let Some(val) = value {
+                    self.compile_expression(val);
+                } else {
+                    self.emit(Opcode::Null, 0, 0);
+                }
+                self.emit(Opcode::Yield, 0, 0);
             }
             _ => panic!("Not implemented")
         };
@@ -153,26 +157,18 @@ impl Compiler {
     /// Add an instruction to the program's bytecode.
     ///
     fn emit(&mut self, opcode: Opcode, op1: i32, op2: i32) -> i32 {
-        let instructions = self.get_instructions().borrow_mut();
-        let position = instructions.len();
+        let mut scope = &mut self.scopes[self.scope_index as usize];
 
-        let instruction = create_instruction(&self.opcodes, opcode, args)
-        instructions.append()
+        let mut instructions = scope.instructions.borrow_mut();
+        let position = instructions.len() as i32;
 
-//     const instruction = createInstruction(op, ...operands);
-//     const position = this.instructions().length;
-//     const temp = new Uint8Array(position + instruction.length);
-//     temp.set(this.instructions());
-//     temp.set(instruction, position);
-//     this.scope().instructions = temp;
-//     this.scope().previousInstruction.opcode =
-//       this.scope().lastInstruction.opcode;
-//     this.scope().previousInstruction.position =
-//       this.scope().lastInstruction.position;
-//     this.scope().lastInstruction.opcode = op;
-//     this.scope().lastInstruction.position = position;
-//     return position;
-//   }
-        position as i32
+        let mut instruction = create_instruction(opcode, op1, op2);
+        instructions.append(&mut instruction);
+        
+        scope.previous_instruction.opcode = scope.last_instruction.opcode;
+        scope.previous_instruction.position = scope.last_instruction.position;
+        scope.last_instruction.opcode = opcode;
+        scope.last_instruction.position = position;
+        position
     }
 }

@@ -6,7 +6,74 @@ use std::collections::HashMap;
  **/
 pub type Bytecode = Vec<u8>;
 
-pub type Opcodes = HashMap<Opcode, Operation>;
+pub type Opcodes = [Option<Operation>; 256];
+
+pub const OPCODES: Opcodes = {
+    const INIT: Option<Operation> = None;
+    let mut opcodes: Opcodes = [INIT; 256];
+    let ops = [
+        (Opcode::Const, "CONST", [2, 0]),
+        (Opcode::Array, "ARRAY", [2, 0]),
+        (Opcode::Len, "LEN", [0, 0]),
+        (Opcode::Index, "INDEX", [0, 0]),
+        (Opcode::SetIndex, "SET_INDEX", [0, 0]),
+        (Opcode::Halt, "HALT", [0, 0]),
+        (Opcode::True, "TRUE", [0, 0]),
+        (Opcode::False, "FALSE", [0, 0]),
+        (Opcode::Null, "NULL", [0, 0]),
+        (Opcode::Add, "ADD", [0, 0]),
+        (Opcode::Subtract, "SUB", [0, 0]),
+        (Opcode::Multiply, "MUL", [0, 0]),
+        (Opcode::Divide, "DIV", [0, 0]),
+        (Opcode::Modulus, "MOD", [0, 0]),
+        (Opcode::And, "AND", [0, 0]),
+        (Opcode::Or, "OR", [0, 0]),
+        (Opcode::Bang, "BANG", [0, 0]),
+        (Opcode::Minus, "MINUS", [0, 0]),
+        (Opcode::Equals, "EQ", [0, 0]),
+        (Opcode::NotEquals, "NOT_EQ", [0, 0]),
+        (Opcode::GreaterThan, "GT", [0, 0]),
+        (Opcode::GreaterThanEquals, "GTE", [0, 0]),
+        (Opcode::GetNative, "GETN", [1, 0]),
+        (Opcode::SetGlobal, "SETG", [2, 0]),
+        (Opcode::GetGlobal, "GETG", [2, 0]),
+        (Opcode::Set, "SET", [1, 0]),
+        (Opcode::Get, "GET", [1, 0]),
+        (Opcode::Jump, "JMP", [2, 0]),
+        (Opcode::JumpIfNot, "JMP_IF_NOT", [2, 0]),
+        (Opcode::Pop, "POP", [0, 0]),
+        (Opcode::Return, "RET", [0, 0]),
+        (Opcode::Call, "CALL", [1, 0]),
+        (Opcode::Closure, "CLOSURE", [2, 1]),
+        (Opcode::SelfClosure, "SELF", [0, 0]),
+        (Opcode::GetClosure, "GETC", [1, 0]),
+        (Opcode::SetClosure, "SETC", [1, 0]),
+        (Opcode::Note, "NOTE", [1, 0]),
+        (Opcode::Control, "CC", [1, 0]),
+        (Opcode::Rest, "REST", [1, 0]),
+        (Opcode::Yield, "YIELD", [0, 0]),
+        (Opcode::Next, "NEXT", [0, 0]),
+    ];
+    let mut i = 0;
+    while i < ops.len() {
+        let (opcode, name, operands) = ops[i];
+        let mut num_operands = 0;
+        if operands[1] != 0 {
+            num_operands = 2;
+        } else if operands[0] != 0 {
+            num_operands = 1;
+        }
+        opcodes[opcode as usize] = Some(Operation {
+            name,
+            opcode,
+            operands,
+            num_operands,
+            size: 1 + operands[0] + operands[1],
+        });
+        i += 1;
+    }
+    opcodes
+};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
@@ -70,89 +137,20 @@ pub enum Opcode {
 }
 
 pub struct Operation {
-    name: String,
+    name: &'static str,
     opcode: Opcode,
     operands: [u8; 2],
     num_operands: usize,
     size: u8,
 }
 
-pub fn get_opcodes() -> HashMap<Opcode, Operation> {
-    let mut opcodes = HashMap::new();
-    for (opcode, name, operands) in [
-        (Opcode::Const, String::from("CONST"), [2, 0]),
-        (Opcode::Array, String::from("ARRAY"), [2, 0]),
-        (Opcode::Len, String::from("LEN"), [0, 0]),
-        (Opcode::Index, String::from("INDEX"), [0, 0]),
-        (Opcode::SetIndex, String::from("SET_INDEX"), [0, 0]),
-        (Opcode::Halt, String::from("HALT"), [0, 0]),
-        (Opcode::True, String::from("TRUE"), [0, 0]),
-        (Opcode::False, String::from("FALSE"), [0, 0]),
-        (Opcode::Null, String::from("NULL"), [0, 0]),
-        (Opcode::Add, String::from("ADD"), [0, 0]),
-        (Opcode::Subtract, String::from("SUB"), [0, 0]),
-        (Opcode::Multiply, String::from("MUL"), [0, 0]),
-        (Opcode::Divide, String::from("DIV"), [0, 0]),
-        (Opcode::Modulus, String::from("MOD"), [0, 0]),
-        (Opcode::And, String::from("AND"), [0, 0]),
-        (Opcode::Or, String::from("OR"), [0, 0]),
-        (Opcode::Bang, String::from("BANG"), [0, 0]),
-        (Opcode::Minus, String::from("MINUS"), [0, 0]),
-        (Opcode::Equals, String::from("EQ"), [0, 0]),
-        (Opcode::NotEquals, String::from("NOT_EQ"), [0, 0]),
-        (Opcode::GreaterThan, String::from("GT"), [0, 0]),
-        (Opcode::GreaterThanEquals, String::from("GTE"), [0, 0]),
-        (Opcode::GetNative, String::from("GETN"), [1, 0]),
-        (Opcode::SetGlobal, String::from("SETG"), [2, 0]),
-        (Opcode::GetGlobal, String::from("GETG"), [2, 0]),
-        (Opcode::Set, String::from("SET"), [1, 0]),
-        (Opcode::Get, String::from("GET"), [1, 0]),
-        (Opcode::Jump, String::from("JMP"), [2, 0]),
-        (Opcode::JumpIfNot, String::from("JMP_IF_NOT"), [2, 0]),
-        (Opcode::Pop, String::from("POP"), [0, 0]),
-        (Opcode::Return, String::from("RET"), [0, 0]),
-        (Opcode::Call, String::from("CALL"), [1, 0]),
-        (Opcode::Closure, String::from("CLOSURE"), [2, 1]),
-        (Opcode::SelfClosure, String::from("SELF"), [0, 0]),
-        (Opcode::GetClosure, String::from("GETC"), [1, 0]),
-        (Opcode::SetClosure, String::from("SETC"), [1, 0]),
-        (Opcode::Note, String::from("NOTE"), [1, 0]),
-        (Opcode::Control, String::from("CC"), [1, 0]),
-        (Opcode::Rest, String::from("REST"), [1, 0]),
-        (Opcode::Yield, String::from("YIELD"), [0, 0]),
-        (Opcode::Next, String::from("NEXT"), [0, 0]),
-    ] {
-        let mut num_operands = 0;
-        if operands[1] != 0 {
-            num_operands = 2;
-        } else if operands[0] != 0 {
-            num_operands = 1;
-        }
-        opcodes.insert(
-            opcode,
-            Operation {
-                name,
-                opcode,
-                operands,
-                num_operands,
-                size: 1 + operands[0] + operands[1],
-            }
-        );
-    }
-    opcodes
-}
-
-pub fn createInstruction(opcode: Opcode, ) {
-
-}
-
 /// Packs operand value of given bytes at an offset within an instruction array.
 ///
-pub fn pack_big_endian(mut arr: &mut Bytecode, offset: u8, mut size: u8, value: u8) {
+pub fn pack_big_endian(mut arr: &mut Bytecode, offset: u8, mut size: u8, value: i32) {
     let mut n = value;
     while size > 0 {
         size -= 1;
-        arr[(offset + size) as usize] = n & 255;
+        arr[(offset + size) as usize] = (n & 255) as u8;
         n >>= 8;
     }
 }
@@ -171,12 +169,12 @@ pub fn unpack_big_endian(arr: &mut Bytecode, offset: u32, size: u32) -> u32 {
 
 /// Create new instruction, packing operands in big-endian byte order.
 ///
-pub fn create_instruction(opcodes: &Opcodes, opcode: Opcode, args: Vec<u8>) -> Bytecode {
-    let operation = opcodes.get(&opcode);
+pub fn create_instruction(opcode: Opcode, op1: i32, op2: i32) -> Bytecode {
+    let operation = &OPCODES[opcode as usize];
     if operation.is_none() {
         return Vec::new();
     }
-    let operation = operation.unwrap();
+    let operation = operation.as_ref().unwrap();
 
     let mut instruction = Vec::new();
     instruction.push(opcode as u8);
@@ -185,11 +183,14 @@ pub fn create_instruction(opcodes: &Opcodes, opcode: Opcode, args: Vec<u8>) -> B
         return instruction;
     }
 
-    let mut offset = 1;
-    for i in 0..operation.num_operands {
-        pack_big_endian(&mut instruction, offset, operation.operands[i], args[i]);
-        offset += operation.operands[i];
+    let mut offset: u8 = 1;
+    pack_big_endian(&mut instruction, offset, operation.operands[0], op1);
+    offset += operation.operands[0];
+
+    if operation.num_operands > 1 {
+        pack_big_endian(&mut instruction, offset, operation.operands[1], op2);
     }
+
     instruction
 }
 
@@ -202,7 +203,8 @@ pub fn disassemble(opcodes: &Opcodes, mut bytecode: &mut Bytecode) -> Option<Str
     while pos < bytecode.len() {
         let byte = bytecode[pos];
         let opcode: Option<Opcode> = num::FromPrimitive::from_u8(byte);
-        let operation = opcodes.get(opcode.as_ref().unwrap())?;
+        let operation = &opcodes[opcode? as usize];
+        let operation = operation.as_ref().unwrap();
         let address = format!("{:0>4}", pos);
 
         pos += 1;
