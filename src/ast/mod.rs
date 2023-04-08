@@ -26,6 +26,8 @@ pub enum Infix {
     LessThanEquals,
     Equals,
     NotEquals,
+    And,
+    Or
 }
 
 #[derive(PartialEq, Debug)]
@@ -198,7 +200,7 @@ pub enum Expression {
     },
     Integer {
         token: Token,
-        value: i64,
+        value: i32,
     },
     Boolean {
         token: Token,
@@ -297,6 +299,8 @@ impl fmt::Display for Expression {
                     Infix::GreaterThanEquals => ">=",
                     Infix::LessThan => ">=",
                     Infix::LessThanEquals => ">=",
+                    Infix::And => "&&",
+                    Infix::Or => "||"
                 };
                 write!(f, "{} {} {}", left, op, right)
             },

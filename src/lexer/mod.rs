@@ -214,7 +214,7 @@ impl<'a> Iterator for Lexer<'a> {
                             ident
                                 .into_iter()
                                 .collect::<String>()
-                                .parse::<i64>()
+                                .parse::<i32>()
                                 .unwrap(),
                         );
                     }
@@ -283,15 +283,15 @@ mod test {
             TokenType::Illegal,
             TokenType::SlashEquals,
             TokenType::Lparen,
-            TokenType::Integer(55_i64),
+            TokenType::Integer(55_i32),
             TokenType::Minus,
-            TokenType::Integer(44_i64),
+            TokenType::Integer(44_i32),
             TokenType::Rparen,
             TokenType::Lbrace,
             TokenType::Rbrace,
             TokenType::Identifier(String::from("a")),
             TokenType::Declare,
-            TokenType::Integer(3_i64),
+            TokenType::Integer(3_i32),
             TokenType::Semicolon,
             TokenType::Identifier(String::from("abc")),
             TokenType::Declare,

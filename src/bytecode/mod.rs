@@ -185,8 +185,8 @@ pub fn create_instruction(opcode: Opcode, op1: i32, op2: i32) -> Bytecode {
     }
     let operation = operation.as_ref().unwrap();
 
-    let mut instruction = Vec::new();
-    instruction.push(opcode as u8);
+    let mut instruction = vec![0; operation.size as usize];
+    instruction[0] = opcode as u8;
 
     if operation.size <= 1 {
         return instruction;

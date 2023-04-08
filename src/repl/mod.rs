@@ -1,5 +1,6 @@
 use crate::lexer::Lexer;
 use crate::parser::Parser;
+use crate::compiler::Compiler;
 
 use std::io::{self, Write};
 
@@ -23,6 +24,14 @@ pub fn create_repl() {
             }
         } else {
             println!("{:?}", program);
+        }
+
+        let mut compiler = Compiler::new(Vec::new(), None);
+        if let Err(compilation_error) = compiler.compile_program(program) {
+            println!("{}", compilation_error);
+        } else {
+            println!("All good!");
+            println!("{:?}", compiler.get_instructions());
         }
     }
 }

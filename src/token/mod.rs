@@ -70,7 +70,7 @@ pub enum TokenType {
     Comment,
 
     Identifier(String),
-    Integer(i64),
+    Integer(i32),
 }
 
 impl fmt::Display for TokenType {

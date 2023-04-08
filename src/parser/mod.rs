@@ -377,6 +377,8 @@ impl<'a> Parser<'a> {
             TokenType::LessThanEquals => Ok(self.parse_infix_operation(left, ast::Infix::LessThanEquals)),
             TokenType::Equals => Ok(self.parse_infix_operation(left, ast::Infix::Equals)),
             TokenType::NotEquals => Ok(self.parse_infix_operation(left, ast::Infix::NotEquals)),
+            TokenType::And => Ok(self.parse_infix_operation(left, ast::Infix::And)),
+            TokenType::Or => Ok(self.parse_infix_operation(left, ast::Infix::Or)),
             TokenType::PlusEquals => Ok(self.parse_compound_assign(left, ast::CompoundAssign::Add)),
             TokenType::MinusEquals => Ok(self.parse_compound_assign(left, ast::CompoundAssign::Subtract)),
             TokenType::AsteriskEquals => Ok(self.parse_compound_assign(left, ast::CompoundAssign::Multiply)),
@@ -410,7 +412,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_integer(&mut self, value: i64) -> Option<ast::Expression> {
+    fn parse_integer(&mut self, value: i32) -> Option<ast::Expression> {
         let token = self.curr.take()?;
         Some(ast::Expression::Integer {
             token,
@@ -710,7 +712,7 @@ mod test {
             panic!("Integer expression parsed incorrectly");
         };
 
-        assert_eq!(int, 1_i64);
+        assert_eq!(int, 1_i32);
     }
 
     #[test]
@@ -865,7 +867,7 @@ mod test {
             panic!("Integer expression parsed incorrectly");
         };
 
-        assert_eq!(int, 1_i64);
+        assert_eq!(int, 1_i32);
     }
 
     #[test]
@@ -895,7 +897,7 @@ mod test {
             panic!("Integer expression parsed incorrectly");
         };
 
-        assert_eq!(int, 1_i64);
+        assert_eq!(int, 1_i32);
     }
 
     #[test]
@@ -1121,6 +1123,8 @@ mod test {
             ("3 <= 4;", Infix::LessThanEquals),
             ("3 == 4;", Infix::Equals),
             ("3 != 4;", Infix::NotEquals),
+            ("3 && 4;", Infix::And),
+            ("3 || 4;", Infix::Or),
         ];
 
         for (input, op) in cases {

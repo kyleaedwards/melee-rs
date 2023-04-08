@@ -15,10 +15,10 @@ pub enum ScopeType {
 /// Symbol representing a scoped variable.
 ///
 pub struct SymbolIdentifier {
-    label: String,
-    index: i32,
-    depth: i32,
-    kind: ScopeType
+    pub label: String,
+    pub index: i32,
+    pub depth: i32,
+    pub kind: ScopeType
 }
 
 /// Symbol table for tracking named variables through the

@@ -2,10 +2,11 @@ use core::fmt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ast::{Program, StatementBlock, Statement, Expression};
+use crate::ast::{Program, StatementBlock, Statement, Expression, Prefix, Infix, CompoundAssign, Identifier};
 use crate::bytecode::{Bytecode, Opcode, create_instruction, get_opcode_by_u8};
-use crate::object::Object;
+use crate::object::{Object, Callable};
 use crate::symbols::{SymbolTable, ScopeType};
+use crate::token::Token;
 
 struct CompiledInstruction {
     pub opcode: Opcode,
@@ -29,16 +30,16 @@ struct CompilerScope {
 }
 
 #[derive(Debug, Clone)]
-struct CompilationError(String);
+pub struct CompilationError(String, Token);
 
 impl fmt::Display for CompilationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let CompilationError(msg) = self;
-        write!(f, "Compilation error: {}", msg)
+        let CompilationError(msg, token) = self;
+        write!(f, "Compilation error: {} at column {}, line {}", msg, token.column, token.line)
     }
 }
 
-struct Compiler {
+pub struct Compiler {
     scopes: Vec<CompilerScope>,
     scope_index: i32, // TODO: Make these Option<usize> instead of negatives
     symbol_table: Rc<RefCell<SymbolTable>>,
@@ -48,7 +49,7 @@ struct Compiler {
 }
 
 impl Compiler {
-    pub fn new(constants: Vec<Object>, symbol_table: Rc<RefCell<SymbolTable>>) -> Compiler {
+    pub fn new(constants: Vec<Object>, symbol_table: Option<Rc<RefCell<SymbolTable>>>) -> Compiler {
         let mut base_symbol_table = SymbolTable::new(ScopeType::Native, None);
         // for func in native_functions {
         //     base_symbol_table.add(func.label);
@@ -63,9 +64,20 @@ impl Compiler {
             breaks: Vec::new()
         };
 
-        compiler.push_scope(Some(symbol_table));
+        if let Some(symbol_table) = symbol_table {
+            compiler.push_scope(Some(symbol_table));
+        } else {
+            let parent = Some(compiler.symbol_table.clone());
+            let global_symbols = SymbolTable::new(ScopeType::Global, parent);
+            compiler.push_scope(Some(Rc::new(RefCell::new(global_symbols))));
+        }
         compiler.scope_index = 0;
         compiler
+    }
+    
+    pub fn get_instructions(&mut self) -> Bytecode {
+        let scope = &self.scopes[self.scope_index as usize];
+        scope.instructions.borrow().clone()
     }
 
     fn push_scope(&mut self, symbol_table: Option<Rc<RefCell<SymbolTable>>>) {
@@ -84,7 +96,7 @@ impl Compiler {
             }
         );
 
-        if let Some(mut symbol_table) = symbol_table {
+        if let Some(symbol_table) = symbol_table {
             symbol_table.borrow_mut().parent = Some(self.symbol_table.clone());
         } else if self.symbol_table.borrow().kind == ScopeType::Native {
             let mut globals = SymbolTable::create_global_symbol_table(None);
@@ -122,7 +134,7 @@ impl Compiler {
 
     pub fn compile_program(&mut self, program: Program) -> Result<(), CompilationError> {
         for stmt in program.statements {
-            if let Err(e) = self.compile_statement(stmt) {
+            if let Err(e) = self.compile_statement(&stmt) {
                 return Err(e);
             }
         }
@@ -131,6 +143,15 @@ impl Compiler {
 
     pub fn compile_statement_block(&mut self, block: StatementBlock) -> Result<(), CompilationError> {
         for stmt in block {
+            if let Err(e) = self.compile_statement(&stmt) {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn compile_ref_statement_block(&mut self, block: &StatementBlock) -> Result<(), CompilationError> {
+        for stmt in block {
             if let Err(e) = self.compile_statement(stmt) {
                 return Err(e);
             }
@@ -138,16 +159,16 @@ impl Compiler {
         Ok(())
     }
 
-    pub fn compile_statement(&mut self, stmt: Statement) -> Result<(), CompilationError> {
+    pub fn compile_statement(&mut self, stmt: &Statement) -> Result<(), CompilationError> {
         match stmt {
             Statement::Break { .. } => {
                 let pos = self.emit(Opcode::Jump, 0xffff, 0).clamp(0, i32::MAX) as usize;
                 let last_index = self.breaks.len() - 1;
                 self.breaks[last_index].push(pos);
             }
-            Statement::Continue { .. } => {
+            Statement::Continue { token } => {
                 if self.loop_starts.len() == 0 {
-                    return Err(CompilationError(String::from("Cannot use continue outside of a loop")));
+                    return Err(CompilationError(String::from("Cannot use continue outside of a loop"), token.clone()));
                 }
                 self.emit(
                     Opcode::Jump,
@@ -157,7 +178,7 @@ impl Compiler {
             }
             Statement::Return { value, .. } => {
                 if let Some(val) = value {
-                    self.compile_expression(val)?;
+                    self.compile_expression(&val)?;
                 } else {
                     self.emit(Opcode::Null, 0, 0);
                 }
@@ -165,21 +186,21 @@ impl Compiler {
             }
             Statement::Yield { value, .. } => {
                 if let Some(val) = value {
-                    self.compile_expression(val)?;
+                    self.compile_expression(&val)?;
                 } else {
                     self.emit(Opcode::Null, 0, 0);
                 }
                 self.emit(Opcode::Yield, 0, 0);
             }
             Statement::Expression(expr) => {
-                self.compile_expression(expr)?;
+                self.compile_expression(&expr)?;
                 self.emit(Opcode::Pop, 0, 0);
             }
             Statement::Declare { name, value, .. } => {
                 let symbol_table = self.symbol_table.clone();
                 let mut symbol_table = symbol_table.borrow_mut();
-                let index = symbol_table.add(name.value);
-                self.compile_expression(value)?;
+                let index = symbol_table.add(name.value.clone());
+                self.compile_expression(&value)?;
                 let set_opcode = if symbol_table.kind == ScopeType::Global {
                     Opcode::SetGlobal
                 } else {
@@ -190,7 +211,7 @@ impl Compiler {
             Statement::For { identifier, collection, block, .. } => {
                 let symbol_table = self.symbol_table.clone();
                 let mut symbol_table = symbol_table.borrow_mut();
-                let position = symbol_table.add(identifier.value);
+                let position = symbol_table.add(identifier.value.clone());
                 let set_opcode = if symbol_table.kind == ScopeType::Global {
                     Opcode::SetGlobal
                 } else {
@@ -211,7 +232,7 @@ impl Compiler {
                 self.emit(set_opcode, counter, 0);
 
                 // Save collection
-                self.compile_expression(collection)?;
+                self.compile_expression(&collection)?;
                 self.emit(set_opcode, collection_index, 0);
 
                 let instructions = {
@@ -243,7 +264,7 @@ impl Compiler {
                 self.emit(set_opcode, counter, 0);
 
                 // Compile code block and loop
-                self.compile_statement_block(block)?;
+                self.compile_ref_statement_block(block)?;
                 self.emit(Opcode::Jump, self.loop_starts[self.loop_starts.len() - 1] as i32, 0);
 
                 // Replace jump-out condition with position after loop
@@ -272,10 +293,10 @@ impl Compiler {
                 self.loop_starts.push(instructions);
                 self.breaks.push(Vec::new());
       
-                self.compile_expression(condition)?;
+                self.compile_expression(&condition)?;
                 let jump_out = self.emit(Opcode::JumpIfNot, 0xffff, 0) as usize;
 
-                self.compile_statement_block(block)?;
+                self.compile_ref_statement_block(block)?;
                 self.emit(Opcode::Jump, self.loop_starts[self.loop_starts.len() - 1] as i32, 0);
                 
                 let instructions = {
@@ -293,11 +314,11 @@ impl Compiler {
                 self.loop_starts.pop();
             }
             Statement::Conditional { condition, consequence, alternative, .. } => {
-                self.compile_expression(condition)?;
+                self.compile_expression(&condition)?;
 
                 // Jump to else clause (or outside of conditional statement if else doesn't exist).
                 let jump_to_else = self.emit(Opcode::JumpIfNot, 0xffff, 0) as usize;
-                self.compile_statement_block(consequence)?;
+                self.compile_ref_statement_block(consequence)?;
       
                 let jump_out = self.emit(Opcode::Jump, 0xffff, 0) as usize;
 
@@ -308,7 +329,7 @@ impl Compiler {
                 self.replace_instruction(jump_to_else, instructions, 0);
 
                 if let Some(alt) = alternative {
-                    self.compile_statement_block(alt)?;
+                    self.compile_ref_statement_block(alt)?;
                 }
 
                 let instructions = {
@@ -321,8 +342,355 @@ impl Compiler {
         Ok(())
     }
 
-    pub fn compile_expression(&mut self, expr: Box<Expression>) -> Result<(), CompilationError> {
-        Err(CompilationError(String::from("Not implemented")))
+    pub fn compile_identifier(&mut self, ident: &Identifier) -> Result<(), CompilationError> {
+        let symbol_table = self.symbol_table.clone();
+        let symbol = symbol_table.borrow_mut().get(&ident.value);
+
+        let (symbol_kind, symbol_index) = if let Some(symbol) = symbol {
+            let symbol_ref = symbol.as_ref();
+            (symbol_ref.kind, symbol_ref.index)
+        } else {
+            return Err(CompilationError(
+                format!("Attempting to use undefined variable {}", &ident.value),
+                ident.token.clone()
+            ))
+        };
+
+        let opcode = match symbol_kind {
+            ScopeType::Free => Opcode::GetClosure,
+            ScopeType::Native => Opcode::GetNative,
+            ScopeType::Global => Opcode::GetGlobal,
+            ScopeType::Slf => Opcode::SelfClosure,
+            _ => Opcode::Get
+        };
+        self.emit(opcode, symbol_index, 0);
+        Ok(())
+    }
+
+    pub fn compile_callable(&mut self, repr: String, generator: bool, token: &Token, parameters: &Vec<Identifier>, body: &Vec<Statement>) -> Result<(), CompilationError> {
+        self.push_scope(None);
+        for param in parameters {
+            self.symbol_table.borrow_mut().add(param.value.clone());
+        }
+        self.compile_ref_statement_block(body)?;
+
+        let (free_symbols, num_symbols) = {
+            let symbol_table = self.symbol_table.borrow_mut();
+            let free_symbols = symbol_table.free_symbols.clone();
+            let num_symbols = symbol_table.symbol_count;
+            (free_symbols, num_symbols)
+        };
+
+        let scope = &self.scopes[self.scope_index as usize];
+
+        // Implicit null return if not explicit
+        if scope.last_instruction.opcode != Opcode::Return {
+            self.emit(Opcode::Null, 0, 0);
+            self.emit(Opcode::Return, 0, 0);
+        }
+
+        let instructions = if let Some(instructions) = self.pop_scope() {
+            instructions
+        } else {
+            return Err(CompilationError(
+                String::from("Error compiling function"),
+                token.clone()
+            ));
+        };
+
+        let symbol_length = free_symbols.len();
+        for symbol in free_symbols {
+            let symbol = symbol.clone();
+            let opcode = match symbol.kind {
+                ScopeType::Free => Opcode::GetClosure,
+                ScopeType::Native => Opcode::GetNative,
+                ScopeType::Global => Opcode::GetGlobal,
+                ScopeType::Slf => Opcode::SelfClosure,
+                _ => Opcode::Get
+            };
+            self.emit(opcode, symbol.index, 0);
+        }
+
+        let fn_or_gen = if generator {
+            Callable::Gen {
+                instructions: instructions.borrow_mut().to_vec(),
+                repr,
+                num_locals: num_symbols as usize,
+                num_params: parameters.len()
+            }
+        } else {
+            Callable::Fn {
+                instructions: instructions.borrow_mut().to_vec(),
+                repr,
+                num_locals: num_symbols as usize,
+                num_params: parameters.len()
+            }
+        };
+        let callable = Object::Callable(fn_or_gen);
+
+        let idx = self.add_constant(callable) as i32;
+        self.emit(Opcode::Closure, idx, symbol_length as i32);
+
+        Ok(())
+    }
+
+    pub fn compile_expression(&mut self, expr: &Box<Expression>) -> Result<(), CompilationError> {
+        match expr.as_ref() {
+            Expression::Boolean { value, .. } => {
+                self.emit(if *value { Opcode::True } else { Opcode::False }, 0, 0);
+            }
+            Expression::Integer { value, .. } => {
+                let constant_index = self.add_constant(Object::Int(*value)) as i32;
+                self.emit(Opcode::Const, constant_index, 0);
+            }
+            Expression::Identifier(ident) => {
+                self.compile_identifier(ident);
+            }
+            Expression::Prefix { operator, right, .. } => {
+                self.compile_expression(right)?;
+                match *operator {
+                    Prefix::Minus => {
+                        self.emit(Opcode::Minus, 0, 0);
+                    }
+                    Prefix::Plus => {
+                        // Little hacky but this operator is meaningless anyways
+                        self.emit(Opcode::Minus, 0, 0);
+                        self.emit(Opcode::Minus, 0, 0);
+                    }
+                    Prefix::Not => {
+                        self.emit(Opcode::Bang, 0, 0);
+                    }
+                }
+            }
+            Expression::Infix { left, operator, right, .. } => {
+                if *operator == Infix::LessThan || *operator == Infix::LessThanEquals {
+                    self.compile_expression(right)?;
+                    self.compile_expression(left)?;
+                } else {
+                    self.compile_expression(left)?;
+                    self.compile_expression(right)?;
+                }
+                let opcode = match *operator {
+                    Infix::Add => Opcode::Add,
+                    Infix::Subtract => Opcode::Subtract,
+                    Infix::Multiply => Opcode::Multiply,
+                    Infix::Divide => Opcode::Divide,
+                    Infix::Modulus => Opcode::Modulus,
+                    Infix::Equals => Opcode::Equals,
+                    Infix::NotEquals => Opcode::NotEquals,
+                    Infix::GreaterThan => Opcode::GreaterThan,
+                    Infix::GreaterThanEquals => Opcode::GreaterThanEquals,
+                    Infix::LessThan => Opcode::GreaterThan,
+                    Infix::LessThanEquals => Opcode::GreaterThanEquals,
+                    Infix::And => Opcode::And,
+                    Infix::Or => Opcode::Or
+                };
+                self.emit(opcode, 0, 0);
+            }
+            Expression::CompoundAssign { token, operator, left, value } => {
+                let opcode = match *operator {
+                    CompoundAssign::Add => Opcode::Add,
+                    CompoundAssign::Subtract => Opcode::Subtract,
+                    CompoundAssign::Multiply => Opcode::Multiply,
+                    CompoundAssign::Divide => Opcode::Divide,
+                    CompoundAssign::Modulus => Opcode::Modulus
+                };
+                match left.as_ref() {
+                    Expression::Index { collection, index, .. } => {
+                        // Left identifier
+                        self.compile_expression(collection)?;
+                        self.compile_expression(index)?;
+                        // Left value
+                        self.compile_expression(collection)?;
+                        self.compile_expression(index)?;
+                        self.emit(Opcode::Index, 0, 0);
+                        // Right value
+                        self.compile_expression(value)?;
+                        // Operation
+                        self.emit(opcode, 0, 0);
+                        // Assignment
+                        self.emit(Opcode::SetIndex, 0, 0);
+                        // Return value
+                        self.compile_expression(collection)?;
+                        self.compile_expression(index)?;
+                        self.emit(Opcode::Index, 0, 0);
+
+                    },
+                    Expression::Identifier(ident) => {
+                        let symbol_table = self.symbol_table.clone();
+                        let symbol = symbol_table.borrow_mut().get(&ident.value);
+                        let (symbol_kind, symbol_index) = if let Some(symbol) = symbol {
+                            let symbol_ref = symbol.as_ref();
+                            (symbol_ref.kind, symbol_ref.index)
+                        } else {
+                            return Err(CompilationError(
+                                format!("Cannot assign undefined variable {}", ident.value),
+                                ident.token.clone()
+                            ))
+                        };
+                        let (setter, getter) = match symbol_kind {
+                            ScopeType::Free => (Opcode::SetClosure, Opcode::GetClosure),
+                            ScopeType::Local => (Opcode::Set, Opcode::Get),
+                            ScopeType::Global => (Opcode::SetGlobal, Opcode::GetGlobal),
+                            _ => {
+                                return Err(CompilationError(
+                                    String::from("Unsupported assignment operation"),
+                                    ident.token.clone()
+                                ));
+                            }
+                        };
+                        // Left value
+                        self.emit(getter, symbol_index, 0);
+                        // Right value
+                        self.compile_expression(value)?;
+                        // Operation
+                        self.emit(opcode, 0, 0);
+                        self.emit(setter, symbol_index, 0);
+                        // Return value
+                        self.emit(getter, symbol_index, 0);
+                    },
+                    _ => {
+                        return Err(CompilationError(
+                            String::from("Left hand of assignment must be a variable or array index expression"),
+                            token.clone()
+                        ));
+                    }
+                }
+            }
+            Expression::Assign { token, left, value } => {
+                match left.as_ref() {
+                    Expression::Index { collection, index, .. } => {
+                        // Left identifier
+                        self.compile_expression(collection)?;
+                        self.compile_expression(index)?;
+                        // Right value
+                        self.compile_expression(value)?;
+                        // Assignment
+                        self.emit(Opcode::SetIndex, 0, 0);
+                        // Return value
+                        self.compile_expression(collection)?;
+                        self.compile_expression(index)?;
+                        self.emit(Opcode::Index, 0, 0);
+                    },
+                    Expression::Identifier(ident) => {
+                        let symbol_table = self.symbol_table.clone();
+                        let symbol = symbol_table.borrow_mut().get(&ident.value);
+                        let (symbol_kind, symbol_index) = if let Some(symbol) = symbol {
+                            let symbol_ref = symbol.as_ref();
+                            (symbol_ref.kind, symbol_ref.index)
+                        } else {
+                            return Err(CompilationError(
+                                format!("Cannot assign undefined variable {}", ident.value),
+                                ident.token.clone()
+                            ))
+                        };
+                        let (setter, getter) = match symbol_kind {
+                            ScopeType::Free => (Opcode::SetClosure, Opcode::GetClosure),
+                            ScopeType::Local => (Opcode::Set, Opcode::Get),
+                            ScopeType::Global => (Opcode::SetGlobal, Opcode::GetGlobal),
+                            _ => {
+                                return Err(CompilationError(
+                                    String::from("Unsupported assignment operation"),
+                                    ident.token.clone()
+                                ));
+                            }
+                        };
+                        self.compile_expression(value)?;
+                        self.emit(setter, symbol_index, 0);
+                        // Return value
+                        self.emit(getter, symbol_index, 0);
+                    },
+                    _ => {
+                        return Err(CompilationError(
+                            String::from("Left hand of assignment must be a variable or array index expression"),
+                            token.clone()
+                        ));
+                    }
+                }
+            }
+            Expression::Array { values, .. } => {
+                for value in values {
+                    self.compile_expression(value)?;
+                }
+                self.emit(Opcode::Array, values.len() as i32, 0);
+            }
+            Expression::Index { collection, index, .. } => {
+                self.compile_expression(collection)?;
+                self.compile_expression(index)?;
+                self.emit(Opcode::Index, 0, 0);
+            }
+            Expression::Next { token, value } => {
+                if let Err(e) = self.compile_expression(value) {
+                    return Err(CompilationError(
+                        String::from("Cannot use the `next` keyword without an operand"),
+                        token.clone()
+                    ))
+                }
+                self.emit(Opcode::Next, 0, 0);
+            }
+            Expression::Function { token, parameters, body } => {
+                self.compile_callable(
+                    format!("{}", expr),
+                    false,
+                    token,
+                    parameters,
+                    body
+                )?;
+            }
+            Expression::Generator { token, parameters, body } => {
+                self.compile_callable(
+                    format!("{}", expr),
+                    true,
+                    token,
+                    parameters,
+                    body
+                )?;
+            }
+            Expression::Call { callee, arguments, .. } => {
+                self.compile_expression(callee)?;
+                for arg in arguments {
+                    self.compile_expression(arg)?;
+                }
+                self.emit(Opcode::Call, arguments.len() as i32, 0);
+            }
+            Expression::Note { token, arguments } => {
+                if arguments.len() < 1 {
+                    return Err(CompilationError(
+                      String::from("Cannot use the `note` keyword without arguments"),
+                      token.clone(),
+                    ));
+                }
+                for arg in arguments {
+                    self.compile_expression(arg)?;
+                }
+                self.emit(Opcode::Note, arguments.len() as i32, 0);
+            }
+            Expression::ControlChange { token, arguments } => {
+                if arguments.len() < 1 {
+                    return Err(CompilationError(
+                      String::from("Cannot use the `cc` keyword without arguments"),
+                      token.clone(),
+                    ));
+                }
+                for arg in arguments {
+                    self.compile_expression(arg)?;
+                }
+                self.emit(Opcode::Control, arguments.len() as i32, 0);
+            }
+            Expression::Rest { token, arguments } => {
+                if arguments.len() < 1 {
+                    return Err(CompilationError(
+                      String::from("Cannot use the `rest` keyword without arguments"),
+                      token.clone(),
+                    ));
+                }
+                for arg in arguments {
+                    self.compile_expression(arg)?;
+                }
+                self.emit(Opcode::Rest, arguments.len() as i32, 0);
+            }
+        }
+        Ok(())
     }
 
     /// Replaces an instruction in the program's bytecode.
