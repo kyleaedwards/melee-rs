@@ -3,7 +3,7 @@ use crate::object::Object;
 
 /// Label defining level of variable scope.
 ///
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ScopeType {
     Native,
     Global,
@@ -14,6 +14,7 @@ pub enum ScopeType {
 
 /// Symbol representing a scoped variable.
 ///
+#[derive(Debug)]
 pub struct SymbolIdentifier {
     pub label: String,
     pub index: i32,
@@ -24,6 +25,7 @@ pub struct SymbolIdentifier {
 /// Symbol table for tracking named variables through the
 /// compilation process.
 ///
+#[derive(Debug)]
 pub struct SymbolTable {
     symbols: HashMap<String, Rc<SymbolIdentifier>>,
     pub free_symbols: Vec<Rc<SymbolIdentifier>>,

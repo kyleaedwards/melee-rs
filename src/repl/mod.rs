@@ -1,6 +1,7 @@
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::compiler::Compiler;
+use crate::bytecode::{disassemble, OPCODES};
 
 use std::io::{self, Write};
 
@@ -23,15 +24,20 @@ pub fn create_repl() {
                 println!("[ERROR]: {}", err);
             }
         } else {
-            println!("{:?}", program);
+            // println!("{:?}", program);
         }
 
         let mut compiler = Compiler::new(Vec::new(), None);
         if let Err(compilation_error) = compiler.compile_program(program) {
             println!("{}", compilation_error);
         } else {
-            println!("All good!");
-            println!("{:?}", compiler.get_instructions());
+            let mut bytecode = compiler.get_instructions();
+            if let Some(code) = disassemble(&OPCODES, &mut bytecode) {
+                println!("{}", code);
+                println!("{:?}", compiler.symbol_table);
+            } else {
+                println!("Error disassembling...");
+            }
         }
     }
 }

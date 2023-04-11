@@ -7,6 +7,8 @@ mod bytecode;
 mod compiler;
 mod symbols;
 mod object;
+mod builtins;
+mod vm;
 
 use crate::repl::create_repl;
 

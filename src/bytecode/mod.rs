@@ -158,7 +158,7 @@ pub fn pack_big_endian(mut arr: &mut Bytecode, offset: u8, mut size: u8, value: 
 /// Retrieves operand value of the given bytes at an offset within an
 /// instruction array.
 ///
-pub fn unpack_big_endian(arr: &mut Bytecode, offset: u32, size: u32) -> u32 {
+pub fn unpack_big_endian(arr: &Bytecode, offset: u32, size: u32) -> u32 {
     let mut n = 0;
     let base: u32 = 256;
     for i in 0..size {

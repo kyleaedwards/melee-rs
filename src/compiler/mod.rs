@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ast::{Program, StatementBlock, Statement, Expression, Prefix, Infix, CompoundAssign, Identifier};
+use crate::builtins::NATIVE_FNS;
 use crate::bytecode::{Bytecode, Opcode, create_instruction, get_opcode_by_u8};
 use crate::object::{Object, Callable};
 use crate::symbols::{SymbolTable, ScopeType};
@@ -30,7 +31,7 @@ struct CompilerScope {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompilationError(String, Token);
+pub struct CompilationError(pub String, pub Token);
 
 impl fmt::Display for CompilationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -42,18 +43,18 @@ impl fmt::Display for CompilationError {
 pub struct Compiler {
     scopes: Vec<CompilerScope>,
     scope_index: i32, // TODO: Make these Option<usize> instead of negatives
-    symbol_table: Rc<RefCell<SymbolTable>>,
-    constants: Vec<Object>,
+    pub symbol_table: Rc<RefCell<SymbolTable>>,
+    constants: Vec<Box<Object>>,
     loop_starts: Vec<usize>,
     breaks: Vec<Vec<usize>>
 }
 
 impl Compiler {
-    pub fn new(constants: Vec<Object>, symbol_table: Option<Rc<RefCell<SymbolTable>>>) -> Compiler {
+    pub fn new(constants: Vec<Box<Object>>, symbol_table: Option<Rc<RefCell<SymbolTable>>>) -> Compiler {
         let mut base_symbol_table = SymbolTable::new(ScopeType::Native, None);
-        // for func in native_functions {
-        //     base_symbol_table.add(func.label);
-        // }
+        for label in NATIVE_FNS {
+            base_symbol_table.add(String::from(label));
+        }
 
         let mut compiler = Compiler{
             scopes: Vec::new(),
@@ -80,6 +81,15 @@ impl Compiler {
         scope.instructions.borrow().clone()
     }
 
+    pub fn get_constants(&mut self) -> Vec<Box<Object>> {
+        let len = self.constants.len();
+        let mut output = Vec::with_capacity(len);
+        for _ in 0..len {
+            output.push(self.constants.remove(0));
+        }
+        output
+    }
+
     fn push_scope(&mut self, symbol_table: Option<Rc<RefCell<SymbolTable>>>) {
         self.scope_index += 1;
         self.scopes.push(
@@ -96,9 +106,10 @@ impl Compiler {
             }
         );
 
-        if let Some(symbol_table) = symbol_table {
-            symbol_table.borrow_mut().parent = Some(self.symbol_table.clone());
-        } else if self.symbol_table.borrow().kind == ScopeType::Native {
+        let symbol_kind = self.symbol_table.clone().borrow().kind;
+        if symbol_table.is_some() {
+            symbol_table.unwrap().borrow_mut().parent = Some(self.symbol_table.clone());
+        } else if symbol_kind == ScopeType::Native {
             let mut globals = SymbolTable::create_global_symbol_table(None);
             // TODO
             globals.parent = Some(self.symbol_table.clone());
@@ -128,7 +139,7 @@ impl Compiler {
     /// Keeps track of a program constant and return a reference.
     ///
     fn add_constant(&mut self, obj: Object) -> usize {
-        self.constants.push(obj);
+        self.constants.push(Box::new(obj));
         return self.constants.len() - 1;
     }
 
@@ -344,7 +355,9 @@ impl Compiler {
 
     pub fn compile_identifier(&mut self, ident: &Identifier) -> Result<(), CompilationError> {
         let symbol_table = self.symbol_table.clone();
-        let symbol = symbol_table.borrow_mut().get(&ident.value);
+        let symbol = {
+            symbol_table.borrow_mut().get(&ident.value)
+        };
 
         let (symbol_kind, symbol_index) = if let Some(symbol) = symbol {
             let symbol_ref = symbol.as_ref();
