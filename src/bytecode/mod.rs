@@ -138,7 +138,7 @@ pub enum Opcode {
 
 pub struct Operation {
     name: &'static str,
-    opcode: Opcode,
+    pub opcode: Opcode,
     operands: [u8; 2],
     num_operands: usize,
     size: u8,

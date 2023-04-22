@@ -37,7 +37,7 @@ impl Frame {
 pub struct ExecutionState {
     pub stack: Rc<RefCell<Vec<Rc<Object>>>>,
     pub sp: i32,
-    pub frames: Rc<RefCell<Vec<Frame>>>,
+    pub frames: Rc<RefCell<Vec<Rc<RefCell<Frame>>>>>,
     pub fp: i32,
     pub parent: Option<Rc<RefCell<ExecutionState>>>,
     pub seq: Option<Iterable>
@@ -166,11 +166,13 @@ pub struct Closure {
 #[derive(Debug)]
 pub enum Iterable {
     Seq{
+        done: bool,
         generator: Closure,
         execution_state: Rc<RefCell<ExecutionState>>
     },
     VirtualSeq{
-        next: fn() -> Object
+        done: bool,
+        next: fn() -> Result<Object, ExecutionError>
     }
 }
 
