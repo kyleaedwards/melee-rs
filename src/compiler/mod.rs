@@ -44,13 +44,13 @@ pub struct Compiler {
     scopes: Vec<CompilerScope>,
     scope_index: i32, // TODO: Make these Option<usize> instead of negatives
     pub symbol_table: Rc<RefCell<SymbolTable>>,
-    constants: Vec<Box<Object>>,
+    constants: Vec<Rc<Object>>,
     loop_starts: Vec<usize>,
     breaks: Vec<Vec<usize>>
 }
 
 impl Compiler {
-    pub fn new(constants: Vec<Box<Object>>, symbol_table: Option<Rc<RefCell<SymbolTable>>>) -> Compiler {
+    pub fn new(constants: Vec<Rc<Object>>, symbol_table: Option<Rc<RefCell<SymbolTable>>>) -> Compiler {
         let mut base_symbol_table = SymbolTable::new(ScopeType::Native, None);
         for label in NATIVE_FNS {
             base_symbol_table.add(String::from(label));
@@ -81,7 +81,7 @@ impl Compiler {
         scope.instructions.borrow().clone()
     }
 
-    pub fn get_constants(&mut self) -> Vec<Box<Object>> {
+    pub fn get_constants(&mut self) -> Vec<Rc<Object>> {
         let len = self.constants.len();
         let mut output = Vec::with_capacity(len);
         for _ in 0..len {
@@ -139,7 +139,7 @@ impl Compiler {
     /// Keeps track of a program constant and return a reference.
     ///
     fn add_constant(&mut self, obj: Object) -> usize {
-        self.constants.push(Box::new(obj));
+        self.constants.push(Rc::new(obj));
         return self.constants.len() - 1;
     }
 
@@ -439,7 +439,7 @@ impl Compiler {
                 num_params: parameters.len()
             }
         };
-        let callable = Object::Callable(fn_or_gen);
+        let callable = Object::Callable(Rc::new(fn_or_gen));
 
         let idx = self.add_constant(callable) as i32;
         self.emit(Opcode::Closure, idx, symbol_length as i32);

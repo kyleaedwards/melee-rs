@@ -20,8 +20,8 @@ type VMCallbackFn = fn(Vec<Box<Object>>);
 /// The Melee virtual machine 
 ///
 pub struct VM{
-    constants: Vec<Box<Object>>,
-    variables: Vec<Box<Object>>,
+    constants: Vec<Rc<Object>>,
+    variables: Vec<Rc<Object>>,
     stack: Rc<RefCell<Vec<Rc<Object>>>>,
     sp: i32,
     frames: Rc<RefCell<Vec<Rc<RefCell<Frame>>>>>,
@@ -33,9 +33,14 @@ pub struct VM{
 /// Virtual stack machine for executing instructions.
 ///
 impl VM {
-    pub fn new(compiler: &mut Compiler, variables: Option<Vec<Box<Object>>>) -> VM {
+    pub fn new(compiler: &mut Compiler, variables: Option<Vec<Rc<Object>>>) -> VM {
         let instructions = compiler.get_instructions();
         let constants = compiler.get_constants();
+        let variables = if let Some(vars) = variables {
+            vars
+        } else {
+            Vec::new()
+        };
         let mut vm = VM{
             constants,
             variables: Vec::new(),
@@ -47,12 +52,12 @@ impl VM {
             callbacks: HashMap::new()
         };
         let closure = Closure{
-            callable: Callable::Fn{
+            callable: Rc::new(Callable::Fn{
                 instructions,
                 repr: String::from("<MAIN>"),
                 num_locals: 0,
                 num_params: 0
-            },
+            }),
             vars: Vec::new(),
         };
         vm.frames.borrow_mut().push(Rc::new(RefCell::new(Frame::new(closure, 0))));
@@ -162,12 +167,12 @@ impl VM {
     /// Pushes a new object onto the VM stack and increments
     /// the stack pointer.
     ///
-    fn push(&mut self, o: Object) -> Result<(), ExecutionError> {
+    fn push(&mut self, o: Rc<Object>) -> Result<(), ExecutionError> {
         if self.sp as usize >= MAX_STACK_SIZE {
             return Err(ExecutionError(String::from("Maximum stack size exceeded")))
         }
         let mut stack = self.stack.borrow_mut();
-        stack.push(Rc::new(o));
+        stack.push(o);
         self.sp += 1;
         Ok(())
     }
@@ -199,7 +204,7 @@ impl VM {
 
     /// Reads operand at offset.
     ///
-    fn read_operand(&mut self, width: i32) -> i32 {
+    fn read_operand(&self, width: i32) -> i32 {
         let frames = self.frames.borrow_mut();
         let len = frames.len();
         let f = frames[len - 1].borrow();
@@ -238,7 +243,7 @@ impl VM {
         match seq {
             Iterable::Seq { done, generator, execution_state } => {
                 if done {
-                    self.push(Object::Null)?;
+                    self.push(Rc::new(Object::Null))?;
                     return Ok(None);
                 }
                 let frames = self.frames.clone();
@@ -256,10 +261,12 @@ impl VM {
     ///
     /// @param exit_frame - Frame on which to halt execution
     ///
-    pub fn run(&mut self, exit_frame: Option<Rc<RefCell<Frame>>>) {
-        let frames = self.frames.borrow();
-        let len = frames.len();
-        let frame = frames[len - 1].clone();
+    pub fn run(&mut self, exit_frame: Option<Rc<RefCell<Frame>>>) -> Result<(), ExecutionError> {
+        let frame = {
+            let frames = self.frames.borrow();
+            let len = frames.len();
+            frames[len - 1].clone()
+        };
         let f = frame.borrow();
         let mut inst = f.instructions();
 
@@ -269,7 +276,7 @@ impl VM {
             // particularly useful because the next item on the stack
             // is the return value from the exited frame.
             if is_exit_frame(&frame, &exit_frame) {
-                return;
+                break;
             }
 
             let mut frame_borrow = frame.borrow_mut();
@@ -282,11 +289,37 @@ impl VM {
             match opcode {
                 Opcode::Const => {
                     let idx = self.read_operand(2) as usize;
-                    self.push(self.constants[idx]);
+                    let cnst = self.constants[idx].clone();
+                    self.push(cnst)?;
                 },
+                Opcode::Closure => {
+                    let idx = self.read_operand(2) as usize;
+                    let num_free = self.read_operand(1) as usize;
+                    let func = self.constants[idx].clone();
+                    let callable = if let Object::Callable(callable) = func.as_ref() {
+                        callable.clone()
+                    } else {
+                        return Err(ExecutionError(String::from("Invalid closure function")));
+                    };
+                    let mut closure_vars = Vec::with_capacity(num_free);
+                    for i in 0..num_free {
+                        let item_idx = (self.sp as usize) - num_free + i;
+                        let item = {
+                            let stack = self.stack.borrow();
+                            stack[item_idx].clone()
+                        };
+                        closure_vars.push(item);
+                    }
+                    self.sp -= num_free as i32;
+                    self.push(Rc::new(Object::Closure(Closure { callable, vars: closure_vars })));
+                },
+                Opcode::SelfClosure => {
+                    self.push(Rc::new(Object::RefClosure(f.closure.clone())))?;
+                }
                 _ => ()
             };
         }
+        Ok(())
     }
 }
 

@@ -9,20 +9,21 @@ use crate::{bytecode::Bytecode, vm::{VM, ExecutionError}};
 pub struct Frame {
     pub ip: i32,
     pub base: i32,
-    pub closure: Closure
+    pub closure: Rc<Closure>
 }
 
 impl Frame {
     pub fn new(closure: Closure, base: i32) -> Frame {
         Frame{
             ip: -1,
-            closure,
+            closure: Rc::new(closure),
             base
         }
     }
 
     pub fn instructions(&self) -> Option<&Bytecode> {
-        match &self.closure.callable {
+        let callable = self.closure.as_ref().callable.as_ref();
+        match callable {
             Callable::Fn { instructions, .. } => Some(&instructions),
             Callable::Gen { instructions, .. } => Some(&instructions),
             _ => None
@@ -159,8 +160,8 @@ impl fmt::Debug for Callable {
 
 #[derive(Debug)]
 pub struct Closure {
-    pub callable: Callable,
-    pub vars: Vec<Box<Object>>,
+    pub callable: Rc<Callable>,
+    pub vars: Vec<Rc<Object>>,
 }
 
 #[derive(Debug)]
@@ -185,9 +186,10 @@ pub enum Object {
   Int(i32),
   Bool(bool),
   Arr(Vec<Box<Object>>),
-  Callable(Callable),
+  Callable(Rc<Callable>),
   Iterable(Iterable),
   Closure(Closure),
+  RefClosure(Rc<Closure>),
   Note(MidiNote),
   Cc(MidiCc),
   Hold(MidiHold),

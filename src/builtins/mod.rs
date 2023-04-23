@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{object::{Object, Callable}, vm::{VM, ExecutionError}};
 
 
@@ -29,10 +31,10 @@ pub fn get_native_fn(key: &str) -> Option<Box<Object>> {
          * chan(Note): Int
          * Given a MIDI note or CC object, returns its channel.
          */
-        "chan" => Some(Box::new(Object::Callable(Callable::NativeFn{
+        "chan" => Some(Box::new(Object::Callable(Rc::new(Callable::NativeFn{
             label,
             func: handle_channel
-        }))),
+        })))),
         _ => None
     }
 }
