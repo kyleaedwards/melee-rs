@@ -1,4 +1,4 @@
-use std::{rc::Rc, cell::RefCell, fmt};
+use std::{rc::Rc, cell::RefCell, fmt, borrow::Borrow};
 
 use crate::{bytecode::Bytecode, vm::{VM, ExecutionError}};
 
@@ -9,23 +9,23 @@ use crate::{bytecode::Bytecode, vm::{VM, ExecutionError}};
 pub struct Frame {
     pub ip: i32,
     pub base: i32,
-    pub closure: Rc<Closure>
+    pub closure: Rc<RefCell<Closure>>
 }
 
 impl Frame {
     pub fn new(closure: Closure, base: i32) -> Frame {
         Frame{
             ip: -1,
-            closure: Rc::new(closure),
+            closure: Rc::new(RefCell::new(closure)),
             base
         }
     }
 
-    pub fn instructions(&self) -> Option<&Bytecode> {
-        let callable = self.closure.as_ref().callable.as_ref();
-        match callable {
-            Callable::Fn { instructions, .. } => Some(&instructions),
-            Callable::Gen { instructions, .. } => Some(&instructions),
+    pub fn instructions(&self) -> Option<Rc<Bytecode>> {
+        let closure = self.closure.as_ref().borrow();
+        match closure.callable.borrow() {
+            Callable::Fn { instructions, .. } => Some(instructions.clone()),
+            Callable::Gen { instructions, .. } => Some(instructions.clone()),
             _ => None
         }
     }
@@ -131,13 +131,13 @@ trait Inspectable {
 pub enum Callable {
     VirtualFn(fn(Vec<Box<Object>>) -> Box<Object>),
     Fn{
-        instructions: Bytecode,
+        instructions: Rc<Bytecode>,
         repr: String,
         num_locals: usize,
         num_params: usize
     },
     Gen{
-        instructions: Bytecode,
+        instructions: Rc<Bytecode>,
         repr: String,
         num_locals: usize,
         num_params: usize
@@ -185,11 +185,11 @@ pub enum Object {
   Yield(Box<Object>),
   Int(i32),
   Bool(bool),
-  Arr(Vec<Box<Object>>),
+  Arr(Vec<Rc<Object>>),
   Callable(Rc<Callable>),
   Iterable(Iterable),
   Closure(Closure),
-  RefClosure(Rc<Closure>),
+  RefClosure(Rc<RefCell<Closure>>),
   Note(MidiNote),
   Cc(MidiCc),
   Hold(MidiHold),

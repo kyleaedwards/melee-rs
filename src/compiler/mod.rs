@@ -426,14 +426,14 @@ impl Compiler {
 
         let fn_or_gen = if generator {
             Callable::Gen {
-                instructions: instructions.borrow_mut().to_vec(),
+                instructions: Rc::new(instructions.borrow_mut().to_vec()),
                 repr,
                 num_locals: num_symbols as usize,
                 num_params: parameters.len()
             }
         } else {
             Callable::Fn {
-                instructions: instructions.borrow_mut().to_vec(),
+                instructions: Rc::new(instructions.borrow_mut().to_vec()),
                 repr,
                 num_locals: num_symbols as usize,
                 num_params: parameters.len()

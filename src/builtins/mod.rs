@@ -24,14 +24,14 @@ pub const NATIVE_FNS: [&str; 1] = [
     "chan"
 ];
 
-pub fn get_native_fn(key: &str) -> Option<Box<Object>> {
+pub fn get_native_fn(key: &str) -> Option<Rc<Object>> {
     let label = String::from(key);
     match key {
         /**
          * chan(Note): Int
          * Given a MIDI note or CC object, returns its channel.
          */
-        "chan" => Some(Box::new(Object::Callable(Rc::new(Callable::NativeFn{
+        "chan" => Some(Rc::new(Object::Callable(Rc::new(Callable::NativeFn{
             label,
             func: handle_channel
         })))),

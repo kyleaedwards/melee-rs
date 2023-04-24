@@ -1,6 +1,6 @@
 use std::{fmt::{self, Display}, collections::HashMap, rc::Rc, cell::RefCell};
 
-use crate::{object::{Object, Frame, Callable, ExecutionState, Closure, Iterable}, compiler::Compiler, bytecode::{unpack_big_endian, OPCODES, Opcode}};
+use crate::{object::{Object, Frame, Callable, ExecutionState, Closure, Iterable}, compiler::Compiler, bytecode::{unpack_big_endian, OPCODES, Opcode}, builtins::{NATIVE_FNS, get_native_fn}};
 
 const MAX_FRAME_SIZE: usize = 1024;
 const MAX_STACK_SIZE: usize = 1024;
@@ -53,7 +53,7 @@ impl VM {
         };
         let closure = Closure{
             callable: Rc::new(Callable::Fn{
-                instructions,
+                instructions: Rc::new(instructions),
                 repr: String::from("<MAIN>"),
                 num_locals: 0,
                 num_params: 0
@@ -198,7 +198,7 @@ impl VM {
         let len = frames.len();
         let f = frames[len - 1].borrow();
         let instructions = f.instructions().unwrap();
-        let destination = unpack_big_endian(instructions, frames[len - 1].borrow().ip as u32 + 1, 2);
+        let destination = unpack_big_endian(&instructions, frames[len - 1].borrow().ip as u32 + 1, 2);
         frames[len - 1].borrow_mut().ip = destination as i32 - 1;
     }
 
@@ -209,7 +209,7 @@ impl VM {
         let len = frames.len();
         let f = frames[len - 1].borrow();
         let instructions = f.instructions().unwrap();
-        let destination = unpack_big_endian(instructions, frames[len - 1].borrow().ip as u32 + 1, 2);
+        let destination = unpack_big_endian(&instructions, frames[len - 1].borrow().ip as u32 + 1, 2);
         frames[len - 1].borrow_mut().ip += width;
         return destination as i32;
     }
@@ -268,7 +268,8 @@ impl VM {
             frames[len - 1].clone()
         };
         let f = frame.borrow();
-        let mut inst = f.instructions();
+        let instructions = f.instructions();
+        let mut inst = instructions.as_ref();
 
         while inst.is_some() && frame.borrow().ip <= inst.unwrap().len() as i32 {
             // The VM can be run recursively, but in doing so, you must
@@ -311,15 +312,222 @@ impl VM {
                         closure_vars.push(item);
                     }
                     self.sp -= num_free as i32;
-                    self.push(Rc::new(Object::Closure(Closure { callable, vars: closure_vars })));
+                    self.push(Rc::new(Object::Closure(Closure { callable, vars: closure_vars })))?;
                 },
                 Opcode::SelfClosure => {
                     self.push(Rc::new(Object::RefClosure(f.closure.clone())))?;
+                },
+                Opcode::Array => {
+                    let size = self.read_operand(2) as usize;
+                    let mut arr = Vec::with_capacity(size);
+                    let start = (self.sp as usize) - size;
+                    for i in 0..size {
+                        let el = self.stack.borrow()[start + i].clone();
+                        arr.push(el);
+                    }
+                    self.sp -= size as i32;
+                    self.push(Rc::new(Object::Arr(arr)))?;
+                },
+                Opcode::Len => {
+                    let arr = self.pop();
+                    if let Some(arr) = arr {
+                        let a = arr.clone();
+                        if let Object::Arr(arr) = a.as_ref() {
+                            self.push(Rc::new(Object::Int(arr.len() as i32)))?;
+                        }
+                    } else {
+                        return Err(ExecutionError(String::from("Cannot retrieve length of non-array")));
+                    }
+                },
+                Opcode::Index => {
+                    let idx = if let Some(idx) = self.pop() {
+                        idx
+                    } else {
+                        return Err(ExecutionError(String::from("Array index must be an integer")));
+                    };
+                    let idx = if let Object::Int(i) = idx.as_ref() {
+                        *i as usize
+                    } else {
+                        return Err(ExecutionError(String::from("Array index must be an integer")));
+                    };
+                    let collection = if let Some(collection) = self.pop() {
+                        collection
+                    } else {
+                        return Err(ExecutionError(String::from("Cannot index into a non-array")));
+                    };
+                    let collection = if let Object::Arr(collection) = collection.as_ref() {
+                        collection
+                    } else {
+                        return Err(ExecutionError(String::from("Array index must be an integer")));
+                    };
+                    if idx >= collection.len() {
+                        self.push(Rc::new(Object::Null))?;
+                    } else {
+                        self.push(collection[idx].clone())?;
+                    }
                 }
+                Opcode::Pop => {
+                    self.pop();
+                },
+                Opcode::True => {
+                    self.push(Rc::new(Object::Bool(true)))?;
+                },
+                Opcode::False => {
+                    self.push(Rc::new(Object::Bool(false)))?;
+                },
+                Opcode::Null => {
+                    self.push(Rc::new(Object::Null))?;
+                },
+                Opcode::SetGlobal => {
+                    let idx = self.read_operand(2) as usize;
+                    self.variables[idx] = if let Some(val) = self.pop() {
+                        val.clone()
+                    } else {
+                        Rc::new(Object::Null)
+                    };
+                },
+                Opcode::GetGlobal => {
+                    let idx = self.read_operand(2) as usize;
+                    let val = self.variables[idx].clone();
+                    self.push(val)?;
+                },
+                Opcode::Set => {
+                    let base = frame_borrow.base as usize;
+                    let idx = self.read_operand(1) as usize;
+                    let obj = if let Some(val) = self.pop() {
+                        val.clone()
+                    } else {
+                        Rc::new(Object::Null)
+                    };
+                    let mut stack = self.stack.borrow_mut();
+                    let stack = stack.as_mut_slice();
+                    stack[base + idx] = obj;
+                },
+                Opcode::Get => {
+                    let idx = self.read_operand(1) as usize;
+                    let base = frame_borrow.base as usize;
+                    let val = self.stack.borrow()[base + idx].clone();
+                    self.push(val)?;
+                },
+                Opcode::SetClosure => {
+                    let idx = self.read_operand(1) as usize;
+                    let obj = if let Some(val) = self.pop() {
+                        val.clone()
+                    } else {
+                        Rc::new(Object::Null)
+                    };
+                    let closure = frame_borrow.closure.clone();
+                    let mut closure = closure.borrow_mut();
+                    closure.vars[idx] = obj;
+                },
+                Opcode::GetClosure => {
+                    let idx = self.read_operand(1) as usize;
+                    let closure = frame_borrow.closure.clone();
+                    let val = closure.borrow().vars[idx].clone();
+                    self.push(val)?;
+                },
+                Opcode::GetNative => {
+                    let idx = self.read_operand(1) as usize;
+                    let func = NATIVE_FNS[idx];
+                    self.push(get_native_fn(func).unwrap())?;
+                },
+                Opcode::Bang => {
+                    let obj = if let Some(val) = self.pop() {
+                        val.clone()
+                    } else {
+                        Rc::new(Object::Null)
+                    };
+                    let obj = obj.as_ref();
+                    match obj {
+                        Object::Int(i) => {
+                            self.push(Rc::new(Object::Bool(*i == 0)))?;
+                        },
+                        Object::Bool(b) => {
+                            self.push(Rc::new(Object::Bool(!*b)))?;
+                        },
+                        Object::Null => {
+                            self.push(Rc::new(Object::Bool(true)))?;
+                        },
+                        _ => {
+                            return Err(ExecutionError(String::from("Bang operator not supported on this data type")));
+                        }
+                    }
+                },
+                Opcode::Minus => {
+                    let obj = if let Some(val) = self.pop() {
+                        val.clone()
+                    } else {
+                        Rc::new(Object::Null)
+                    };
+                    let obj = obj.as_ref();
+                    match obj {
+                        Object::Int(i) => {
+                            self.push(Rc::new(Object::Int(-i)))?;
+                        },
+                        _ => {
+                            return Err(ExecutionError(String::from("Minus operator not supported on this data type")));
+                        }
+                    }
+                },
+                Opcode::Add => {
+                    let val = self.infix_operation(Opcode::Add)?;
+                    self.push(Rc::new(Object::Int(val)))?;
+                },
+                Opcode::Subtract => {
+                    let val = self.infix_operation(Opcode::Subtract)?;
+                    self.push(Rc::new(Object::Int(val)))?;
+                },
+                Opcode::Multiply => {
+                    let val = self.infix_operation(Opcode::Multiply)?;
+                    self.push(Rc::new(Object::Int(val)))?;
+                },
+                Opcode::Divide => {
+                    let val = self.infix_operation(Opcode::Divide)?;
+                    self.push(Rc::new(Object::Int(val)))?;
+                },
+                Opcode::Modulus => {
+                    let val = self.infix_operation(Opcode::Modulus)?;
+                    self.push(Rc::new(Object::Int(val)))?;
+                },
                 _ => ()
             };
         }
         Ok(())
+    }
+
+    fn infix_operation(&mut self, op: Opcode) -> Result<i32, ExecutionError> {
+        let mut stack = self.stack.borrow_mut();
+        let stack = stack.as_mut_slice();
+        let left = &stack[self.sp as usize - 2];
+        let right = &stack[self.sp as usize - 1];
+        self.sp -= 2;
+        let left = match left.as_ref() {
+            Object::Int(i) => {
+                *i
+            },
+            _ => {
+                return Err(ExecutionError(String::from("Math infix operator not supported on this data type")));
+            }
+        };
+        let right = match right.as_ref() {
+            Object::Int(i) => {
+                *i
+            },
+            _ => {
+                return Err(ExecutionError(String::from("Math infix operator not supported on this data type")));
+            }
+        };
+
+        let val = match op {
+            Opcode::Add => left + right,
+            Opcode::Subtract => left - right,
+            Opcode::Multiply => left * right,
+            Opcode::Divide => left / right,
+            Opcode::Modulus => left % right,
+            _ => return Err(ExecutionError(String::from("Unhandled binary integer operator")))
+        };
+
+        Ok(val)
     }
 }
 
@@ -340,6 +548,7 @@ impl Display for VM {
 
         let frames = self.frames.borrow();
         let closure = &frames.last().unwrap().borrow().closure;
+        let closure = closure.borrow();
         write!(f, "FRAME {:?}\n", closure)?;
         write!(f, "\nCVARS\n")?;
         for var in &closure.vars {
