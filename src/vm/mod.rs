@@ -51,7 +51,7 @@ impl VM {
             coroutine: None,
             callbacks: HashMap::new()
         };
-        let closure = Closure{
+        let closure = Rc::new(RefCell::new(Closure{
             callable: Rc::new(Callable::Fn{
                 instructions: Rc::new(instructions),
                 repr: String::from("<MAIN>"),
@@ -59,14 +59,14 @@ impl VM {
                 num_params: 0
             }),
             vars: Vec::new(),
-        };
+        }));
         vm.frames.borrow_mut().push(Rc::new(RefCell::new(Frame::new(closure, 0))));
         vm
     }
 
     /// Create a new coroutine execution state for a generator sequence.
     ///
-    fn create_coroutine(&mut self, closure: Closure, args: Vec<Rc<Object>>, num_locals: i32) -> ExecutionState {
+    fn create_coroutine(&mut self, closure: Rc<RefCell<Closure>>, args: Vec<Rc<Object>>, num_locals: i32) -> ExecutionState {
         let parent = self.coroutine.as_mut().unwrap().clone();
         let parent_execution_state = ExecutionState{
             stack: self.stack.clone(),
@@ -470,25 +470,81 @@ impl VM {
                     }
                 },
                 Opcode::Add => {
-                    let val = self.infix_operation(Opcode::Add)?;
+                    let val = self.infix_operation(opcode)?;
                     self.push(Rc::new(Object::Int(val)))?;
                 },
                 Opcode::Subtract => {
-                    let val = self.infix_operation(Opcode::Subtract)?;
+                    let val = self.infix_operation(opcode)?;
                     self.push(Rc::new(Object::Int(val)))?;
                 },
                 Opcode::Multiply => {
-                    let val = self.infix_operation(Opcode::Multiply)?;
+                    let val = self.infix_operation(opcode)?;
                     self.push(Rc::new(Object::Int(val)))?;
                 },
                 Opcode::Divide => {
-                    let val = self.infix_operation(Opcode::Divide)?;
+                    let val = self.infix_operation(opcode)?;
                     self.push(Rc::new(Object::Int(val)))?;
                 },
                 Opcode::Modulus => {
-                    let val = self.infix_operation(Opcode::Modulus)?;
+                    let val = self.infix_operation(opcode)?;
                     self.push(Rc::new(Object::Int(val)))?;
                 },
+                Opcode::Equals => {
+                    let val = self.comparison_operation(opcode)?;
+                    self.push(Rc::new(Object::Bool(val)))?;
+                },
+                Opcode::NotEquals => {
+                    let val = self.comparison_operation(opcode)?;
+                    self.push(Rc::new(Object::Bool(val)))?;
+                },
+                Opcode::GreaterThan => {
+                    let val = self.comparison_operation(opcode)?;
+                    self.push(Rc::new(Object::Bool(val)))?;
+                },
+                Opcode::GreaterThanEquals => {
+                    let val = self.comparison_operation(opcode)?;
+                    self.push(Rc::new(Object::Bool(val)))?;
+                },
+                Opcode::And => {
+                    let val = {
+                        let stack = self.stack.borrow();
+                        let stack = stack.as_slice();
+                        let left = &stack[self.sp as usize - 2];
+                        let right = &stack[self.sp as usize - 1];
+                        self.sp -= 2;
+                        left.is_truthy() && right.is_truthy()
+                    };
+                    self.push(Rc::new(Object::Bool(val)))?;
+                },
+                Opcode::Or => {
+                    let val = {
+                        let stack = self.stack.borrow();
+                        let stack = stack.as_slice();
+                        let left = &stack[self.sp as usize - 2];
+                        let right = &stack[self.sp as usize - 1];
+                        self.sp -= 2;
+                        left.is_truthy() || right.is_truthy()
+                    };
+                    self.push(Rc::new(Object::Bool(val)))?;
+                },
+                Opcode::Jump => self.jump(),
+                Opcode::JumpIfNot => {
+                    let obj = if let Some(val) = self.pop() {
+                        val.clone()
+                    } else {
+                        Rc::new(Object::Null)
+                    };
+                    if !obj.is_truthy() {
+                        self.jump();
+                    } else {
+                        let frames = self.frames.borrow_mut();
+                        let len = frames.len();
+                        frames[len - 1].borrow_mut().ip += 2;
+                    }
+                },
+                Opcode::Call => {
+                    let idx = self.read_operand(1) as usize;
+                }
                 _ => ()
             };
         }
@@ -529,6 +585,134 @@ impl VM {
 
         Ok(val)
     }
+
+    fn comparison_operation(&mut self, op: Opcode) -> Result<bool, ExecutionError> {
+        let mut stack = self.stack.borrow_mut();
+        let stack = stack.as_mut_slice();
+        let left = &stack[self.sp as usize - 2];
+        let right = &stack[self.sp as usize - 1];
+        self.sp -= 2;
+        let res = match left.as_ref() {
+            Object::Int(i) => {
+                if let Object::Int(j) = right.as_ref() {
+                    match op {
+                        Opcode::Equals => *i == *j,
+                        Opcode::NotEquals => *i != *j,
+                        Opcode::GreaterThan => *i > *j,
+                        Opcode::GreaterThanEquals => *i >= *j,
+                        _ => {
+                            return Err(ExecutionError(String::from("Unrecognized comparison operator")));
+                        }
+                    }
+                } else {
+                    return Err(ExecutionError(String::from("Must compare two variables of the same type")));
+                }
+            },
+            Object::Bool(i) => {
+                if let Object::Bool(j) = right.as_ref() {
+                    match op {
+                        Opcode::Equals => *i == *j,
+                        Opcode::NotEquals => *i != *j,
+                        Opcode::GreaterThan => *i > *j,
+                        Opcode::GreaterThanEquals => *i >= *j,
+                        _ => {
+                            return Err(ExecutionError(String::from("Unrecognized comparison operator")));
+                        }
+                    }
+                } else {
+                    return Err(ExecutionError(String::from("Must compare two variables of the same type")));
+                }
+            },
+            _ => {
+                return Err(ExecutionError(String::from("Comparison infix operator not supported on this data type")));
+            }
+        };
+        Ok(res)
+    }
+
+    fn call(&mut self, callee: Rc<Object>, mut num_args: usize) -> Result<Option<Rc<RefCell<Frame>>>, ExecutionError> {
+        match callee.as_ref() {
+            Object::Closure(closure) => {
+                match closure.callable.as_ref() {
+                    Callable::Fn { instructions, repr, num_locals, num_params } => {
+                        while num_args > *num_params {
+                            self.pop();
+                            num_args -= 1;
+                        }
+                        while num_args < *num_params {
+                            self.push(Rc::new(Object::Null))?;
+                            num_args += 1;
+                        }
+                        let frame = Frame::new(callee.clone(), self.sp - (num_args as i32));
+                        self.frames.borrow_mut()[self.fp as usize] = Rc::new(RefCell::new(frame));
+                        self.fp += 1;
+                        self.sp = frame.base + (*num_locals as i32);
+                
+                        // Specify an exit frame.
+                        return Ok(Some(self.frames.borrow()[self.fp as usize - 2].clone()));
+                    },
+                    Callable::Gen { instructions, repr, num_locals, num_params } => {
+                        while num_args > *num_params {
+                            self.pop();
+                            num_args -= 1;
+                        }
+                        while num_args < *num_params {
+                            self.push(Rc::new(Object::Null))?;
+                            num_args += 1;
+                        }
+                        let args = self.gather_args(num_args);
+                        let execution_state = self.create_coroutine(callee.clone(), args, num_locals);
+                        self.push(
+                            Rc::new(Object::Iterable(
+                                Iterable::Seq {
+                                    done: false,
+                                    generator: callee.clone(),
+                                    execution_state: Rc::new(RefCell::new(execution_state))
+                                }
+                            ),
+                          );
+                    },
+                    _ => {
+                        return Err(ExecutionError(String::from("Unexpected call")));
+                    }
+                }
+            },
+            Object::Callable(callable) => {
+                match callable.as_ref() {
+                    Callable::NativeFn { label, func } => {
+                        let args = self.gather_args(num_args);
+                        let res = func(self, args)?;
+                        self.push(res)?;
+                    },
+                    _ => {
+                        return Err(ExecutionError(String::from("Callable was not properly wrapped in a closure")));
+                    }
+                }
+                None
+            },
+            _ => {
+                return Err(ExecutionError(String::from("Cannot perform opcode CALL on a non-callable stack element")));
+            }
+        }
+
+          if (fn instanceof obj.Fn) {
+            const frame = new obj.Frame(callee, this.sp - numArgs);
+            this.frames[this.fp] = frame;
+            this.fp++;
+            this.sp = frame.base + fn.numLocals;
+    
+            // Specify an exit frame.
+            return this.frames[this.fp - 2];
+          } else if (fn instanceof obj.Gen) {
+            const args = this.gatherArgs(numArgs);
+            this.push(
+              new obj.Seq(
+                callee,
+                this.createCoroutine(callee, args, fn.numLocals),
+              ),
+            );
+          }
+      }
 }
 
 fn is_exit_frame(frame: &Rc<RefCell<Frame>>, exit_frame: &Option<Rc<RefCell<Frame>>>) -> bool {

@@ -13,10 +13,10 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(closure: Closure, base: i32) -> Frame {
+    pub fn new(closure: Rc<RefCell<Closure>>, base: i32) -> Frame {
         Frame{
             ip: -1,
-            closure: Rc::new(RefCell::new(closure)),
+            closure,
             base
         }
     }
@@ -144,7 +144,7 @@ pub enum Callable {
     },
     NativeFn{
         label: String,
-        func: fn(&VM, Vec<Box<Object>>) -> Result<Box<Object>, ExecutionError>
+        func: fn(&VM, Vec<Rc<Object>>) -> Result<Rc<Object>, ExecutionError>
     }
 }
 
@@ -168,7 +168,7 @@ pub struct Closure {
 pub enum Iterable {
     Seq{
         done: bool,
-        generator: Closure,
+        generator: Rc<RefCell<Closure>>,
         execution_state: Rc<RefCell<ExecutionState>>
     },
     VirtualSeq{
@@ -194,4 +194,15 @@ pub enum Object {
   Cc(MidiCc),
   Hold(MidiHold),
   Rest(MidiRest),
+}
+
+impl Object {
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Object::Null => false,
+            Object::Bool(b) => *b,
+            Object::Int(i) => *i != 0,
+            _ => true
+        }
+    }
 }
